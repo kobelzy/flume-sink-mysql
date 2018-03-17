@@ -35,15 +35,12 @@ public class MysqlSink extends AbstractSink implements Configurable {
     private PreparedStatement preparedStatement;
     private Connection conn;
     private int batchSize;
-    private String[] fieldsNames;
     private List<String> fieldsNameList = new ArrayList<String>();
     //用于保存目标表数据类型的List
     private List<String> fieldsTypeList=new ArrayList<String>();
     private String separator;
 
     private int fieldSize;
-    //查询数据字典连接器
-    private Statement statement;
 
     //字典编码映射表
     private Map<String, String> encodeMap = new HashMap<String, String>();
@@ -101,28 +98,27 @@ public class MysqlSink extends AbstractSink implements Configurable {
         conn.setAutoCommit(false);
         } catch (SQLException e) {
             e.printStackTrace();
-            e.printStackTrace();
             log.error("获取mysql连接失败：{}", e.getMessage());
             System.exit(1);
         }
         //获取插入目标表的数据格式
+        Statement statement;
         try {
-            statement=conn.createStatement();
-            ResultSetMetaData rs=statement.executeQuery("select * from "+tableName+" limit 1").getMetaData();
+            statement =conn.createStatement();
+            ResultSetMetaData rs= statement.executeQuery("select * from "+tableName+" limit 1").getMetaData();
             for(int i=0;i<rs.getColumnCount();i++){
                 //获取字段数据格式
                fieldsTypeList.add(rs.getColumnTypeName(i+1));
                //获取字段名称呢个
                fieldsNameList.add(rs.getColumnName(i+1));
             }
-
         } catch (SQLException e) {
             e.printStackTrace();
         }
 //
-        System.out.println("length:"+fieldsTypeList.size());
+        System.out.println("length:"+fieldsNameList.size());
         for(int i=0;i<fieldsTypeList.size();i++){
-            System.out.print(fieldsTypeList.get(i));
+//            System.out.print(fieldsTypeList.get(i));
             System.out.println(fieldsNameList.get(i));
         }
         //
@@ -135,11 +131,12 @@ public class MysqlSink extends AbstractSink implements Configurable {
             else
                 sb.append(",");
         }
-//        String fields=mkString(fieldsNameList,",");
-//        String sql = "insert into " + tableName + " (" + fields + ") values ( " + sb.toString() + " )";
-        String sql = "insert into " + tableName +" values ( " + sb.toString() + " )";
+        String fields=mkString(fieldsNameList,",");
+        String sql = "insert into " + tableName + " (" + fields + ") values ( " + sb.toString() + " )";
+//        String sql = "insert into " + tableName +" values ( " + sb.toString() + " )";
 
         try {
+
             preparedStatement = conn.prepareStatement(sql);
             //用于插入不合格数据,
             lossRecordStatement = conn.prepareStatement("insert into " + lossRecordTableName + " (target_table,record) values (?,?)");
@@ -164,9 +161,8 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     encodeMap.put(rs.getString(1), rs.getString(2));
                 }
             }
-            Iterator<Map.Entry<String, String>> entries = encodeMap.entrySet().iterator();
-            while (entries.hasNext()) {
-                Map.Entry<String, String> entry = entries.next();
+            //测试打印map内容
+            for (Map.Entry<String, String> entry : encodeMap.entrySet()) {
                 System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
             }
         } catch (SQLException e) {
@@ -191,18 +187,18 @@ public class MysqlSink extends AbstractSink implements Configurable {
                 if (event != null) {
                     content = new String(event.getBody());
                     // 添加
-                    String[] arr_field = content.split(separator,-1);
+                    String[] arr_field = content.split(separator);
                     if (arr_field.length + 3 != fieldSize) {
-//                        writeLossRecords(lossRecordStatement,conn,content,tableName);
+                        writeLossRecords(lossRecordStatement,conn,content,tableName);
                         System.out.println("error1");
                         break;
                     }
 
-                    for (int j = 1; j <= arr_field.length; j++) {
-                        preparedStatement.setObject(j, arr_field[j - 1]);
-                    }
+//                    for (int j = 1; j <= arr_field.length; j++) {
+//                        preparedStatement.setObject(j, arr_field[j - 1]);
+//                    }
                     //-3
-/*                    for(int j=0;j<fieldsTypeList.size()-3;j++){
+                    for(int j=0;j<fieldsTypeList.size()-3;j++){
                         try {
                         String dataType=fieldsTypeList.get(j);
                             String value=arr_field[j];
@@ -215,20 +211,20 @@ public class MysqlSink extends AbstractSink implements Configurable {
                             default:preparedStatement.setObject(j+1,value);break;
                         }
                         } catch (ParseException e) {
-//                            writeLossRecords(lossRecordStatement,conn,content,tableName,e);
+                            writeLossRecords(lossRecordStatement,conn,content,tableName,e);
                             e.printStackTrace();
                         }catch(Exception e){
-//                            writeLossRecords(lossRecordStatement,conn,content,tableName,e);
+                            writeLossRecords(lossRecordStatement,conn,content,tableName,e);
                             e.printStackTrace();
                         }
-                    }*/
+                    }
                     //新增的编码字段加入
-                    for (int j = 1; j <= encodeFieldsNames.length; j++) {
+                    for(int j=1;j<=encodeFieldsNames.length;j++){
                         //需要添加编码的字段名称
-                        String encodeFieldsName = encodeFieldsNames[j - 1];
+                        String encodeFieldsName=encodeFieldsNames[j-1];
                         //需要添加编码的字段的下标
-                        Integer fieldIndex = fieldsNameList.indexOf(encodeFieldsName);
-                        preparedStatement.setObject(arr_field.length + j,
+                        Integer fieldIndex= fieldsNameList.indexOf(encodeFieldsName);
+                        preparedStatement.setObject(arr_field.length+j,
                                 encodeMap.get(arr_field[fieldIndex]));
                     }
                     preparedStatement.addBatch();
@@ -337,7 +333,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
      * @return
      */
     private  String mkString(List<String> list,String separative){
-        StringBuffer sb=new StringBuffer("");
+        StringBuilder sb=new StringBuilder("");
         for(String str:list) {
             sb.append(str+separative);
         }
@@ -348,17 +344,20 @@ public class MysqlSink extends AbstractSink implements Configurable {
         try {
         lossRecordStatement.setObject(1, tableName);
         lossRecordStatement.setObject(2, record);
+            lossRecordStatement.execute();
             conn.commit();
 
         } catch (SQLException e) {
             e.printStackTrace();
         }
-        log.warn("数据长度：{}", record);
+        log.warn("数据长度错误：{}", record);
     };
     private static void writeLossRecords(PreparedStatement lossRecordStatement,Connection conn,String record,String tableName,Exception recordException){
         try {
             lossRecordStatement.setObject(1, tableName);
             lossRecordStatement.setObject(2, record);
+            lossRecordStatement.execute();
+
             conn.commit();
         } catch (SQLException e) {
             e.printStackTrace();
