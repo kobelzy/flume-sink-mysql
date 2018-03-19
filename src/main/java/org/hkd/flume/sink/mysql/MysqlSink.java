@@ -4,6 +4,7 @@ import java.sql.*;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.Date;
 
 import org.apache.flume.Channel;
 import org.apache.flume.Context;
@@ -53,7 +54,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
     private String lossRecordTableName;
     //不合格数据插入表连接器
     private PreparedStatement lossRecordStatement;
-    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+    private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
     public MysqlSink() {
         log.info("start sink service. name : mysql sink.");
     }
@@ -105,6 +106,10 @@ public class MysqlSink extends AbstractSink implements Configurable {
         Statement statement;
         try {
             statement =conn.createStatement();
+            //创建错误数据存储表
+            statement.execute("CREATE TABLE  IF NOT EXISTS `loss_records` (  `id` int(11) NOT NULL AUTO_INCREMENT, `target_table` varchar(40) DEFAULT NULL," +
+                    "`date` TIMESTAMP  DEFAULT  CURRENT_TIMESTAMP ,`exception` varchar(40) DEFAULT  NULL ,`record` varchar(512) DEFAULT NULL,  PRIMARY KEY (`id`))");
+           //查询目标表元数据
             ResultSetMetaData rs= statement.executeQuery("select * from "+tableName+" limit 1").getMetaData();
             for(int i=0;i<rs.getColumnCount();i++){
                 //获取字段数据格式
@@ -139,14 +144,14 @@ public class MysqlSink extends AbstractSink implements Configurable {
 
             preparedStatement = conn.prepareStatement(sql);
             //用于插入不合格数据,
-            lossRecordStatement = conn.prepareStatement("insert into " + lossRecordTableName + " (target_table,record) values (?,?)");
+            lossRecordStatement = conn.prepareStatement("insert into " + lossRecordTableName + " (target_table,exception,record) values (?,?,?)");
         } catch (SQLException e) {
             e.printStackTrace();
             log.error("获取mysql连接失败：{}", e.getMessage());
             System.exit(1);
         }
         //获取需匹配编码的原始字段名称
-        encodeFieldsNames = encodeFields.split(",");
+        encodeFieldsNames = encodeFields.split(",",-1);
         for (String name : encodeFieldsNames) {
             System.out.println("需要匹配的字段:" + name);
         }
@@ -187,7 +192,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
                 if (event != null) {
                     content = new String(event.getBody());
                     // 添加
-                    String[] arr_field = content.split(separator);
+                    String[] arr_field = content.split(separator,-1);
                     if (arr_field.length + 3 != fieldSize) {
                         writeLossRecords(lossRecordStatement,conn,content,tableName);
                         System.out.println("error1");
@@ -197,26 +202,22 @@ public class MysqlSink extends AbstractSink implements Configurable {
 //                    for (int j = 1; j <= arr_field.length; j++) {
 //                        preparedStatement.setObject(j, arr_field[j - 1]);
 //                    }
+                    try {
                     //-3
                     for(int j=0;j<fieldsTypeList.size()-3;j++){
-                        try {
+
                         String dataType=fieldsTypeList.get(j);
                             String value=arr_field[j];
                         switch (dataType){
-                            case "TINYINT" :preparedStatement.setObject(j+1,Integer.valueOf(value));break;
-                            case "INT":preparedStatement.setObject(j+1,Integer.valueOf(value));break;
-                            case "DOUBLE":preparedStatement.setObject(j+1,Double.valueOf(value));break;
-                            case "CHAR":preparedStatement.setObject(j+1,value.toCharArray()[0]);break;
-                            case "DATETIME":preparedStatement.setObject(j+1,format.parse(arr_field[j]));break;
-                            default:preparedStatement.setObject(j+1,value);break;
+                            case "TINYINT" :int values=Integer.valueOf(value);preparedStatement.setInt(j+1,values);break;
+                            case "INT":int valueInt=Integer.valueOf(value);preparedStatement.setInt(j+1,valueInt);break;
+                            case "DOUBLE":double valueDouble=Double.valueOf(value);preparedStatement.setDouble(j+1,valueDouble);break;
+                            case "CHAR":char valueChar=value.charAt(0);preparedStatement.setString(j+1,value);break;
+                            case "DATETIME":
+                                java.sql.Date valueDate=new java.sql.Date(format.parse(arr_field[j]).getTime());preparedStatement.setDate(j+1,valueDate);break;
+                            default:preparedStatement.setString(j+1,value);break;
                         }
-                        } catch (ParseException e) {
-                            writeLossRecords(lossRecordStatement,conn,content,tableName,e);
-                            e.printStackTrace();
-                        }catch(Exception e){
-                            writeLossRecords(lossRecordStatement,conn,content,tableName,e);
-                            e.printStackTrace();
-                        }
+
                     }
                     //新增的编码字段加入
                     for(int j=1;j<=encodeFieldsNames.length;j++){
@@ -224,10 +225,18 @@ public class MysqlSink extends AbstractSink implements Configurable {
                         String encodeFieldsName=encodeFieldsNames[j-1];
                         //需要添加编码的字段的下标
                         Integer fieldIndex= fieldsNameList.indexOf(encodeFieldsName);
-                        preparedStatement.setObject(arr_field.length+j,
+                        preparedStatement.setString(arr_field.length+j,
                                 encodeMap.get(arr_field[fieldIndex]));
                     }
                     preparedStatement.addBatch();
+                    } catch (ParseException e) {
+                        writeLossRecords(lossRecordStatement,conn,content,tableName,e);
+                        continue;
+                    }catch(Exception e){
+                        writeLossRecords(lossRecordStatement,conn,content,tableName,e);
+                        continue;
+                    }
+
                 } else {
                     result = Status.BACKOFF;
                     break;
@@ -342,8 +351,9 @@ public class MysqlSink extends AbstractSink implements Configurable {
     }
     private static void writeLossRecords(PreparedStatement lossRecordStatement,Connection conn,String record,String tableName){
         try {
-        lossRecordStatement.setObject(1, tableName);
-        lossRecordStatement.setObject(2, record);
+            lossRecordStatement.setString(1, tableName);
+            lossRecordStatement.setString(2,"数据长度错误");
+            lossRecordStatement.setString(3, record);
             lossRecordStatement.execute();
             conn.commit();
 
@@ -354,8 +364,9 @@ public class MysqlSink extends AbstractSink implements Configurable {
     };
     private static void writeLossRecords(PreparedStatement lossRecordStatement,Connection conn,String record,String tableName,Exception recordException){
         try {
-            lossRecordStatement.setObject(1, tableName);
-            lossRecordStatement.setObject(2, record);
+            lossRecordStatement.setString(1, tableName);
+            lossRecordStatement.setString(2,recordException.getMessage());
+            lossRecordStatement.setString(3, record);
             lossRecordStatement.execute();
 
             conn.commit();
