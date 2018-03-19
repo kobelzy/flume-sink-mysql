@@ -165,7 +165,7 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
                     content = new String(event.getBody());
                     // Ìí¼Ó
                     String[] arr_field = content.split(separator);
-                    if(arr_field.length+3 != fieldSize) {
+                    if(arr_field.length+encodeFieldsNames.length != fieldSize) {
                         lossRecordStatement.setObject(1,tableName);
                         lossRecordStatement.setObject(2,content);
                         Boolean isExecute= lossRecordStatement.execute();

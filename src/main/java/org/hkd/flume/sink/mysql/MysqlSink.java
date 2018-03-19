@@ -188,8 +188,19 @@ public class MysqlSink extends AbstractSink implements Configurable {
         try {
             preparedStatement.clearBatch();
             for (int i = 0; i < batchSize; i++) {
+
                 event = channel.take();
                 if (event != null) {
+                    //测试head
+                    Map<String,String> head=event.getHeaders();
+                    for (Map.Entry<String, String> entry : head.entrySet()) {
+                        System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
+                    }
+                    /**头部包含的三个属性
+                     * Key = timestamp, Value = 1521438722310
+                     Key = filePath, Value = /home/hkd3/
+                     Key = fileName, Value = test4.csv
+                     */
                     content = new String(event.getBody());
                     // 添加
                     String[] arr_field = content.split(separator,-1);
