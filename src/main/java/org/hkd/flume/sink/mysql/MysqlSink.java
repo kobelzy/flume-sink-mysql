@@ -120,12 +120,6 @@ public class MysqlSink extends AbstractSink implements Configurable {
         } catch (SQLException e) {
             e.printStackTrace();
         }
-//
-        System.out.println("length:"+fieldsNameList.size());
-        for(int i=0;i<fieldsTypeList.size();i++){
-//            System.out.print(fieldsTypeList.get(i));
-            System.out.println(fieldsNameList.get(i));
-        }
         //
         fieldSize = fieldsNameList.size();
         StringBuffer sb = new StringBuffer();
@@ -141,7 +135,6 @@ public class MysqlSink extends AbstractSink implements Configurable {
 //        String sql = "insert into " + tableName +" values ( " + sb.toString() + " )";
 
         try {
-
             preparedStatement = conn.prepareStatement(sql);
             //用于插入不合格数据,
             lossRecordStatement = conn.prepareStatement("insert into " + lossRecordTableName + " (target_table,exception,record) values (?,?,?)");
@@ -152,11 +145,9 @@ public class MysqlSink extends AbstractSink implements Configurable {
         }
         //获取需匹配编码的原始字段名称
         encodeFieldsNames = encodeFields.split(",",-1);
-        for (String name : encodeFieldsNames) {
-            System.out.println("需要匹配的字段:" + name);
-        }
-        //获取编码字典
+            log.info("表["+tableName+"]需要匹配的编码字段包括："+encodeFields);
 
+        //获取编码字典
         try {
             for (String encodeFieldName : encodeFieldsNames) {
                 statement = conn.createStatement();
@@ -166,18 +157,17 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     encodeMap.put(rs.getString(1), rs.getString(2));
                 }
             }
-            //测试打印map内容
-            for (Map.Entry<String, String> entry : encodeMap.entrySet()) {
-                System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
-            }
+
         } catch (SQLException e) {
             e.printStackTrace();
             log.error("获取mysql连接失败：{}", e.getMessage());
             System.exit(1);
         }
+        log.info("表["+tableName+"]对应字典编码长度为："+encodeMap.size());
     }
 
     public Status process() throws EventDeliveryException {
+
         Status result = Status.READY;
         Channel channel = getChannel();
         Transaction transaction = channel.getTransaction();
@@ -204,7 +194,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     content = new String(event.getBody());
                     // 添加
                     String[] arr_field = content.split(separator,-1);
-                    if (arr_field.length + 3 != fieldSize) {
+                    if (arr_field.length + encodeFieldsNames.length != fieldSize) {
                         writeLossRecords(lossRecordStatement,conn,content,tableName);
                         System.out.println("error1");
                         break;
@@ -214,8 +204,8 @@ public class MysqlSink extends AbstractSink implements Configurable {
 //                        preparedStatement.setObject(j, arr_field[j - 1]);
 //                    }
                     try {
-                    //-3
-                    for(int j=0;j<fieldsTypeList.size()-3;j++){
+                    //从目标表中获取的字段数要比源数据多3个匹配编码的字段
+                    for(int j=0;j<fieldsTypeList.size()-encodeFieldsNames.length;j++){
 
                         String dataType=fieldsTypeList.get(j);
                             String value=arr_field[j];
@@ -230,13 +220,18 @@ public class MysqlSink extends AbstractSink implements Configurable {
                         }
 
                     }
+                        //测试打印map内容
+        for (Map.Entry<String, String> entry : encodeMap.entrySet()) {
+            System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
+        }
                     //新增的编码字段加入
                     for(int j=1;j<=encodeFieldsNames.length;j++){
                         //需要添加编码的字段名称
                         String encodeFieldsName=encodeFieldsNames[j-1];
                         //需要添加编码的字段的下标
-                        Integer fieldIndex= fieldsNameList.indexOf(encodeFieldsName);
-                        preparedStatement.setString(arr_field.length+j,
+                        int fieldIndex= fieldsNameList.indexOf(encodeFieldsName);
+                        System.out.println(arr_field[fieldIndex]+"-》"+encodeMap.get(arr_field[fieldIndex]));
+                        preparedStatement.setObject(arr_field.length+j,
                                 encodeMap.get(arr_field[fieldIndex]));
                     }
                     preparedStatement.addBatch();
