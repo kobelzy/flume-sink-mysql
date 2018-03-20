@@ -221,9 +221,9 @@ public class MysqlSink extends AbstractSink implements Configurable {
 
                     }
                         //测试打印map内容
-        for (Map.Entry<String, String> entry : encodeMap.entrySet()) {
-            System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
-        }
+//        for (Map.Entry<String, String> entry : encodeMap.entrySet()) {
+//            System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
+//        }
                     //新增的编码字段加入
                     for(int j=1;j<=encodeFieldsNames.length;j++){
                         //需要添加编码的字段名称
