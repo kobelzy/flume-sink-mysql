@@ -44,7 +44,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
     private int fieldSize;
 
     //字典编码映射表
-    private Map<String, Integer> encodeMap = new HashMap<String, Integer>();
+    private Map<String, Integer> encodeMap = new IdentityHashMap<String, Integer>();
     //获取需匹配编码的原始字段名称
     private String encodeFields;
     private String[] encodeFieldsNames;
@@ -54,6 +54,11 @@ public class MysqlSink extends AbstractSink implements Configurable {
     private String lossRecordTableName;
     //不合格数据插入表连接器
     private PreparedStatement lossRecordStatement;
+
+    //需要匹配字典编码的字段，从配置文件中获取
+    private String dictFields;
+    private String[] dictFieldsArr;
+    private Map<String,Integer> dictMap=new IdentityHashMap<String,Integer>();
     private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
 
     public MysqlSink() {
@@ -82,6 +87,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
         lossRecordTableName = context.getString("lossRecordTableName");
         Preconditions.checkNotNull(lossRecordTableName, "lossRecordTableName must be set!!");
         separator = context.getString("separator", ",");
+        dictFields = context.getString("dictFields");
 
     }
 
@@ -104,12 +110,12 @@ public class MysqlSink extends AbstractSink implements Configurable {
             System.exit(1);
         }
         //获取插入目标表的数据格式
-        Statement statement;
+        Statement statement = null;
         try {
             statement = conn.createStatement();
             //创建错误数据存储表
             statement.execute("CREATE TABLE  IF NOT EXISTS `loss_records` (  `id` int(11) NOT NULL AUTO_INCREMENT, `target_table` varchar(40) DEFAULT NULL," +
-                    "`date` TIMESTAMP  DEFAULT  CURRENT_TIMESTAMP ,`exception` varchar(40) DEFAULT  NULL ,`record` varchar(512) DEFAULT NULL,  PRIMARY KEY (`id`))");
+                    "`date` TIMESTAMP  DEFAULT  CURRENT_TIMESTAMP ,`exception` varchar(40) DEFAULT  NULL ,`record` varchar(1025) DEFAULT NULL,  PRIMARY KEY (`id`))");
             //查询目标表元数据
             ResultSetMetaData rs = statement.executeQuery("select * from " + tableName + " limit 1").getMetaData();
             for (int i = 0; i < rs.getColumnCount(); i++) {
@@ -121,8 +127,8 @@ public class MysqlSink extends AbstractSink implements Configurable {
         } catch (SQLException e) {
             e.printStackTrace();
         }
-        //
-        fieldSize = fieldsNameList.size();
+        //删除
+        fieldSize = fieldsNameList.size()-1;
         StringBuffer sb = new StringBuffer();
         for (int i = 0; i < fieldSize; i++) {
             sb.append("?");
@@ -148,7 +154,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
         encodeFieldsNames = encodeFields.split(",", -1);
         log.info("表[" + tableName + "]需要匹配的编码字段包括：" + encodeFields);
 
-        //获取编码字典
+        //获取编码地区字典以及枚举字典表
         try {
 //            for (String encodeFieldName : encodeFieldsNames) {
 //                statement = conn.createStatement();
@@ -164,13 +170,27 @@ public class MysqlSink extends AbstractSink implements Configurable {
                 encodeMap.put(rs.getString(1), rs.getInt(2));
             }
 
-
+            //获取枚举字典表
+            ResultSet rsDict=statement.executeQuery("select CNNAME,CODE_ID from data_type_def");
+            while(rsDict.next()){
+                //需要按照value值获取其int类型的ID值，
+                dictMap.put(rsDict.getString(1),rsDict.getInt(2));
+            }
         } catch (SQLException e) {
             e.printStackTrace();
             log.error("获取mysql连接失败：{}", e.getMessage());
             System.exit(1);
+        }finally {
+            try {
+                statement.close();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
         }
-        log.info("表[" + tableName + "]对应字典编码长度为：" + encodeMap.size());
+        log.info("表[" + tableName + "]对应编码字典长度为：" + encodeMap.size());
+        log.info("表[" + tableName + "]对应枚举字典长度为：" + dictMap.size());
+
+        dictFieldsArr=dictFields.split(",");
     }
 
     public Status process() throws EventDeliveryException {
@@ -189,10 +209,10 @@ public class MysqlSink extends AbstractSink implements Configurable {
                 event = channel.take();
                 if (event != null) {
                     //测试head
-                    Map<String, String> head = event.getHeaders();
-                    for (Map.Entry<String, String> entry : head.entrySet()) {
-                        System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
-                    }
+//                    Map<String, String> head = event.getHeaders();
+//                    for (Map.Entry<String, String> entry : head.entrySet()) {
+//                        System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
+//                    }
                     /**头部包含的三个属性
                      * Key = timestamp, Value = 1521438722310
                      Key = filePath, Value = /home/hkd3/
@@ -203,10 +223,16 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     String[] arr_field = content.split(separator, -1);
                     if (arr_field.length + encodeFieldsNames.length != fieldSize) {
                         writeLossRecords(lossRecordStatement, conn, content, tableName);
-                        System.out.println("error1");
+                        System.out.println("目标数量："+fieldSize);
                         break;
                     }
-
+                    //int部分字段匹配字典边
+                    for(String dictField:dictFieldsArr){
+                        //获取其对应的下标
+                        int index=fieldsNameList.indexOf(dictField);
+                        //获取该值对应的字典
+                        arr_field[index]= String.valueOf(dictMap.get(arr_field[index]));
+                    }
 //                    for (int j = 1; j <= arr_field.length; j++) {
 //                        preparedStatement.setObject(j, arr_field[j - 1]);
 //                    }
@@ -241,7 +267,8 @@ public class MysqlSink extends AbstractSink implements Configurable {
                                     preparedStatement.setDate(j + 1, valueDate);
                                     break;
                                 default:
-                                    preparedStatement.setString(j + 1, value);
+
+                                    preparedStatement.setString(j + 1, value.replace("\"", ""));
                                     break;
                             }
 
@@ -256,10 +283,11 @@ public class MysqlSink extends AbstractSink implements Configurable {
                             String encodeFieldsName = encodeFieldsNames[j - 1];
                             //需要添加编码的字段的下标
                             int fieldIndex = fieldsNameList.indexOf(encodeFieldsName);
-                            System.out.println(arr_field[fieldIndex] + "-》" + encodeMap.get(arr_field[fieldIndex]));
                             preparedStatement.setInt(arr_field.length + j,
                                     encodeMap.get(arr_field[fieldIndex]));
                         }
+                        //添加批次时间
+//                        preparedStatement.setString(fieldSize,);
                         preparedStatement.addBatch();
                     } catch (ParseException e) {
                         writeLossRecords(lossRecordStatement, conn, content, tableName, e);
@@ -294,6 +322,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
         if (preparedStatement != null) {
             try {
                 preparedStatement.close();
+                lossRecordStatement.close();
             } catch (SQLException e) {
                 e.printStackTrace();
             }
