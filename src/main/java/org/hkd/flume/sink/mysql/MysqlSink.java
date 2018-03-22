@@ -113,7 +113,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
             statement = conn.createStatement();
             //创建错误数据存储表
             statement.execute("CREATE TABLE  IF NOT EXISTS `loss_records` (  `id` int(11) NOT NULL AUTO_INCREMENT, `target_table` varchar(40) DEFAULT NULL," +
-                    "`date` TIMESTAMP  DEFAULT  CURRENT_TIMESTAMP ,`exception` varchar(40) DEFAULT  NULL ,`record` varchar(1025) DEFAULT NULL,  PRIMARY KEY (`id`))");
+                    "`date` TIMESTAMP  DEFAULT  CURRENT_TIMESTAMP ,`exception` varchar(40) DEFAULT  NULL ,`record` text DEFAULT NULL,  PRIMARY KEY (`id`))");
             //查询目标表元数据
             ResultSetMetaData rs = statement.executeQuery("select * from " + tableName + " limit 1").getMetaData();
             for (int i = 0; i < rs.getColumnCount(); i++) {
@@ -220,6 +220,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     // 添加
                     String[] arr_field = content.split(separator, -1);
                     if (arr_field.length + encodeFieldsNames.length != fieldSize) {
+                        String exception="数据长度错误，当前数据长度："+arr_field.length+"目标长度："+(fieldSize- encodeFieldsNames.length);
                         writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, "数据长度错误：{}");
                         System.out.println("目标数量：" + fieldSize);
                         break;
@@ -421,7 +422,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
 
         try {
             lossRecordStatement.setString(1, tableName);
-            lossRecordStatement.setString(2, "数据长度错误");
+            lossRecordStatement.setString(2, exception);
             lossRecordStatement.setString(3, record);
             lossRecordStatement.execute();
             conn.commit();
