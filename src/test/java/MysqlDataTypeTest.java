@@ -5,15 +5,13 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.util.HashMap;
-import java.util.IdentityHashMap;
-import java.util.Map;
+import java.util.*;
 
 /**
  * Created by taihe on 2018/3/16.
  */
 public class MysqlDataTypeTest {
-  private static  Map<String, Integer> dictMap = new HashMap<String, Integer>();
+  private static  Map<String, Integer> dictMap = new HashMap<>();
 
     public static void main(String[] args) throws FileNotFoundException {
         try {
@@ -33,9 +31,9 @@ public class MysqlDataTypeTest {
                 dictMap.put(rsDict.getString(1), rsDict.getInt(2));
             }
 //            dictMap.put("你好", 1);
-//            for (Map.Entry<String, Integer> entry : dictMap.entrySet()) {
-//                System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
-//            }
+            for (Map.Entry<String, Integer> entry : dictMap.entrySet()) {
+                System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
+            }
 //            System.out.println("支持:" + dictMap.get("支持"));
 
 
@@ -53,9 +51,22 @@ public class MysqlDataTypeTest {
             InputStreamReader read = new InputStreamReader(                    new FileInputStream(file));//考虑到编码格式
             BufferedReader bufferedReader = new BufferedReader(read);
             String lineTxt = null;
+            List<String> list=new ArrayList<String>();
+            String[] dictFieldsArr="UNDER_AREA,UNDER_REGION,VENDER,MR_FINISH,HSDPA_MARK".split(",");
             while ((lineTxt = bufferedReader.readLine()) != null) {
                 String[] splied=lineTxt.split(",",-1);
-                System.out.println(splied[8]+"："+dictMap.get(splied[9].replace("\"","")));
+//                System.out.println(splied[9]+"："+dictMap.get(splied[9].replace("\"","")));
+                int index=14;
+                String value=splied[index].replace("\"","");
+                Integer dicInt = dictMap.get(value);
+                System.out.println("下标：" + index  + ",原始值：" + value + "，对应值：" + dicInt);
+//                for (String dictField : dictFieldsArr) {
+//                    //获取其对应的下标
+//                    int index = fieldsNameList.indexOf(dictField);
+//                    String value = arr_field[index].replace("\"", "");
+//                    int dicInt = dictMap.getOrDefault(dictMap.get(value), 0);
+//                    System.out.println("下标：" + index + ",字段：" + dictField + ",原始值：" + value + "，对应值：" + dicInt);
+//                }
             }
             read.close();
         }

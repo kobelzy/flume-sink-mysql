@@ -31,7 +31,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
     private String password;
     private PreparedStatement preparedStatement;
     private Connection conn;
-    private int batchSize;
+    private static int batchSize;
     private List<String> fieldsNameList = new ArrayList<String>();
     //用于保存目标表数据类型的List
     private List<String> fieldsTypeList = new ArrayList<String>();
@@ -54,8 +54,10 @@ public class MysqlSink extends AbstractSink implements Configurable {
     //需要匹配字典编码的字段，从配置文件中获取
     private String dictFields;
     private String[] dictFieldsArr;
-    private Map<String,Integer> dictMap=new HashMap<String,Integer>();
+    private Map<String, Integer> dictMap = new HashMap<String, Integer>();
     private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+
+    private int batchOfLossRecord = 0;
 
     public MysqlSink() {
         log.info("start sink service. name : mysql sink.");
@@ -124,7 +126,8 @@ public class MysqlSink extends AbstractSink implements Configurable {
             e.printStackTrace();
         }
         //删除
-        fieldSize = fieldsNameList.size()-1;
+        fieldsNameList.remove("INPUT_BATCH");
+        fieldSize = fieldsNameList.size();
         StringBuffer sb = new StringBuffer();
         for (int i = 0; i < fieldSize; i++) {
             sb.append("?");
@@ -147,7 +150,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
             System.exit(1);
         }
         //获取需匹配编码的原始字段名称
-        encodeFieldsNames = encodeFields.split(",", -1);
+        encodeFieldsNames = encodeFields.split(",");
         log.info("表[" + tableName + "]需要匹配的编码字段包括：" + encodeFields);
 
         //获取编码地区字典以及枚举字典表
@@ -167,16 +170,16 @@ public class MysqlSink extends AbstractSink implements Configurable {
             }
 
             //获取枚举字典表
-            ResultSet rsDict=statement.executeQuery("select CNNAME,CODE_ID from data_type_def");
-            while(rsDict.next()){
+            ResultSet rsDict = statement.executeQuery("select CNNAME,CODE_ID from data_type_def");
+            while (rsDict.next()) {
                 //需要按照value值获取其int类型的ID值，
-                dictMap.put(rsDict.getString(1),rsDict.getInt(2));
+                dictMap.put(rsDict.getString(1), rsDict.getInt(2));
             }
         } catch (SQLException e) {
             e.printStackTrace();
             log.error("获取mysql连接失败：{}", e.getMessage());
             System.exit(1);
-        }finally {
+        } finally {
             try {
                 statement.close();
             } catch (SQLException e) {
@@ -185,11 +188,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
         }
         log.info("表[" + tableName + "]对应编码字典长度为：" + encodeMap.size());
         log.info("表[" + tableName + "]对应枚举字典长度为：" + dictMap.size());
-
-                    for (Map.Entry<String, Integer> entry : dictMap.entrySet()) {
-                        System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
-                    }
-        dictFieldsArr=dictFields.split(",");
+        dictFieldsArr = dictFields.split(",");
     }
 
     public Status process() throws EventDeliveryException {
@@ -221,30 +220,29 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     // 添加
                     String[] arr_field = content.split(separator, -1);
                     if (arr_field.length + encodeFieldsNames.length != fieldSize) {
-                        writeLossRecords(lossRecordStatement, conn, content, tableName);
-                        System.out.println("目标数量："+fieldSize);
+                        writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, "数据长度错误：{}");
+                        System.out.println("目标数量：" + fieldSize);
                         break;
                     }
                     //int部分字段匹配字典边
-                    for(String dictField:dictFieldsArr){
+                    for (String dictField : dictFieldsArr) {
                         //获取其对应的下标
-                        int index=fieldsNameList.indexOf(dictField);
-                        System.out.println("下标："+index+",字段："+dictField+",原始值："+arr_field[index].replace("\"", "")+"，对应值："+dictMap.get(dictMap.get(arr_field[index].replace("\"", ""))));
-                        //获取字典值
-//                        int dict_index=
-//                        System.out.println(dict_index);
+                        int index = fieldsNameList.indexOf(dictField);
+                        String value = arr_field[index].replace("\"", "");
+                        Integer dicInt = dictMap.get(value);
+//                        System.out.println("下标：" + index + ",字段：" + dictField + ",原始值：" + value + "，对应值：" + dicInt);
                         //获取该值对应的字典
-                        arr_field[index]= String.valueOf(dictMap.get(arr_field[index].replace("\"", "")));
+                        arr_field[index] = String.valueOf(dicInt);
                     }
 //                    for (int j = 1; j <= arr_field.length; j++) {
 //                        preparedStatement.setObject(j, arr_field[j - 1]);
 //                    }
                     try {
                         //从目标表中获取的字段数要比源数据多3个匹配编码的字段
-                        for (int j = 0; j < fieldsTypeList.size() - encodeFieldsNames.length; j++) {
+                        for (int j = 0; j < fieldSize - encodeFieldsNames.length; j++) {
 
                             String dataType = fieldsTypeList.get(j);
-                            String value = arr_field[j];
+                            String value = arr_field[j].replace("\"", "");
                             switch (dataType) {
                                 case "TINYINT":
                                     int values = Integer.valueOf(value);
@@ -271,33 +269,29 @@ public class MysqlSink extends AbstractSink implements Configurable {
                                     break;
                                 default:
 
-                                    preparedStatement.setString(j + 1, value.replace("\"", ""));
+                                    preparedStatement.setString(j + 1, value);
                                     break;
                             }
 
                         }
-                        //测试打印map内容
-//        for (Map.Entry<String, String> entry : encodeMap.entrySet()) {
-//            System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
-//        }
                         //新增的编码字段加入
-                        for (int j = 1; j <= encodeFieldsNames.length; j++) {
+                        for (int j = 0; j < encodeFieldsNames.length; j++) {
                             //需要添加编码的字段名称
-                            String encodeFieldsName = encodeFieldsNames[j - 1];
+                            String encodeFieldsName = encodeFieldsNames[j];
                             //需要添加编码的字段的下标
                             int fieldIndex = fieldsNameList.indexOf(encodeFieldsName);
-                            preparedStatement.setInt(arr_field.length + j,
-                                    encodeMap.get(arr_field[fieldIndex]));
+                            Integer encodeValue = encodeMap.get(arr_field[fieldIndex].replace("\"", ""));
+                            preparedStatement.setInt(arr_field.length + j + 1, encodeValue);
                         }
                         //添加批次时间
 //                        preparedStatement.setString(fieldSize,);
                         preparedStatement.addBatch();
                     } catch (ParseException e) {
-                        writeLossRecords(lossRecordStatement, conn, content, tableName, e);
+                        writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, e.getMessage());
                         e.printStackTrace();
                         continue;
                     } catch (Exception e) {
-                        writeLossRecords(lossRecordStatement, conn, content, tableName, e);
+                        writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, e.getMessage());
                         e.printStackTrace();
                         continue;
                     }
@@ -317,6 +311,12 @@ public class MysqlSink extends AbstractSink implements Configurable {
             log.error("Failed to commit transaction." + "Transaction rolled back.", e);
 
         } finally {
+            try {
+                preparedStatement.executeBatch();
+                conn.commit();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
             transaction.close();
         }
         return result;
@@ -417,40 +417,29 @@ public class MysqlSink extends AbstractSink implements Configurable {
         return sb.toString();
     }
 
-    private static void writeLossRecords(PreparedStatement lossRecordStatement, Connection conn, String record, String tableName) {
+    private static void writeLossRecords(PreparedStatement lossRecordStatement, Connection conn, String record, String tableName, int batchOfLossRecord, String exception) {
+
         try {
             lossRecordStatement.setString(1, tableName);
             lossRecordStatement.setString(2, "数据长度错误");
             lossRecordStatement.setString(3, record);
             lossRecordStatement.execute();
             conn.commit();
-
-        } catch (SQLException e) {
-            e.printStackTrace();
-        }
-        log.warn("数据长度错误：{}", record);
-    }
-
-    ;
-
-    private static void writeLossRecords(PreparedStatement lossRecordStatement, Connection conn, String record, String tableName, Exception recordException) {
-        try {
-            lossRecordStatement.setString(1, tableName);
-            lossRecordStatement.setString(2, recordException.getMessage());
-            lossRecordStatement.setString(3, record);
-            lossRecordStatement.execute();
-//            lossRecordStatement.addBatch();
-//            if (i == 100) {
-//                lossRecordStatement.executeBatch();
-//                conn.commit();
-//            }
-            conn.commit();
+            if (batchOfLossRecord < batchSize) {
+                lossRecordStatement.addBatch();
+            } else {
+                lossRecordStatement.executeBatch();
+                conn.commit();
+            }
         } catch (SQLException e) {
             e.printStackTrace();
             log.error("有错误数据，且写入错误库失败:" + e.getMessage());
         }
-        log.warn("数据错误：{}", record);
+        log.warn(exception, record);
+        batchOfLossRecord++;
     }
 
     ;
+
+
 }
