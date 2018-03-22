@@ -11,7 +11,7 @@ import java.sql.*;
 import java.util.*;
 
 /***
- * ´´½¨¶ªÊ§Êı¾İ±í
+ * åˆ›å»ºä¸¢å¤±æ•°æ®è¡¨
  * create table loss_records(id int,target_table varchar(20),record varchar(255)
  */
 public class MysqlSink_Copy extends AbstractSink implements Configurable {
@@ -33,19 +33,19 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
     private String separator;
 
     private int fieldSize;
-    //²éÑ¯Êı¾İ×ÖµäÁ¬½ÓÆ÷
+    //æŸ¥è¯¢æ•°æ®å­—å…¸è¿æ¥å™¨
     private Statement statement;
 
-    //×Öµä±àÂëÓ³Éä±í
+    //å­—å…¸ç¼–ç æ˜ å°„è¡¨
     private Map<String,String> encodeMap=new HashMap<String,String>();
-    //»ñÈ¡ĞèÆ¥Åä±àÂëµÄÔ­Ê¼×Ö¶ÎÃû³Æ
+    //è·å–éœ€åŒ¹é…ç¼–ç çš„åŸå§‹å­—æ®µåç§°
     private String encodeFields;
     private String[] encodeFieldsNames;
-    //×Öµä±íÃû³Æ
+    //å­—å…¸è¡¨åç§°
     private String encodeTableName;
-    //²»ºÏ¸ñÊı¾İµÄ´æ´¢±í
+    //ä¸åˆæ ¼æ•°æ®çš„å­˜å‚¨è¡¨
     private String lossRecordTableName;
-    //²»ºÏ¸ñÊı¾İ²åÈë±íÁ¬½ÓÆ÷
+    //ä¸åˆæ ¼æ•°æ®æ’å…¥è¡¨è¿æ¥å™¨
     private PreparedStatement lossRecordStatement;
     public MysqlSink_Copy() {
         log.info("start sink service. name : mysql sink.");
@@ -84,11 +84,11 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
             Class.forName("com.mysql.jdbc.Driver");
         } catch (ClassNotFoundException e) {
             e.printStackTrace();
-            log.error("Çı¶¯×¢²áÊ§°Ü£º{}", e.getMessage());
+            log.error("é©±åŠ¨æ³¨å†Œå¤±è´¥ï¼š{}", e.getMessage());
         }
 
         String url = "jdbc:mysql://" + hostname + ":" + port + "/" + databaseName;
-        // Æ´½Ó²åÈëÓï¾ä
+        // æ‹¼æ¥æ’å…¥è¯­å¥
         fieldsNames=fields.split(",");
         fieldSize = fieldsNames.length;
         for(int i=0;i<fieldSize;i++){
@@ -108,21 +108,21 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
             conn = DriverManager.getConnection(url, user, password);
             conn.setAutoCommit(false);
             preparedStatement = conn.prepareStatement(sql);
-            //ÓÃÓÚ²åÈë²»ºÏ¸ñÊı¾İ,
+            //ç”¨äºæ’å…¥ä¸åˆæ ¼æ•°æ®,
 
             lossRecordStatement=conn.prepareStatement("insert into "+lossRecordTableName+" (target_table,record) values (?,?)");
 
         } catch (SQLException e) {
             e.printStackTrace();
-            log.error("»ñÈ¡mysqlÁ¬½ÓÊ§°Ü£º{}", e.getMessage());
+            log.error("è·å–mysqlè¿æ¥å¤±è´¥ï¼š{}", e.getMessage());
             System.exit(1);
         }
-        //»ñÈ¡ĞèÆ¥Åä±àÂëµÄÔ­Ê¼×Ö¶ÎÃû³Æ
+        //è·å–éœ€åŒ¹é…ç¼–ç çš„åŸå§‹å­—æ®µåç§°
         encodeFieldsNames=encodeFields.split(",");
         for (String name:encodeFieldsNames) {
-            System.out.println("ĞèÒªÆ¥ÅäµÄ×Ö¶Î:" + name);
+            System.out.println("éœ€è¦åŒ¹é…çš„å­—æ®µ:" + name);
         }
-        //»ñÈ¡±àÂë×Öµä
+        //è·å–ç¼–ç å­—å…¸
 
         try {
             for(String encodeFieldName:encodeFieldsNames){
@@ -144,7 +144,7 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
             }
         } catch (SQLException e) {
             e.printStackTrace();
-            log.error("»ñÈ¡mysqlÁ¬½ÓÊ§°Ü£º{}", e.getMessage());
+            log.error("è·å–mysqlè¿æ¥å¤±è´¥ï¼š{}", e.getMessage());
             System.exit(1);
         }
     }
@@ -163,26 +163,26 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
                 event = channel.take();
                 if (event != null) {
                     content = new String(event.getBody());
-                    // Ìí¼Ó
+                    // æ·»åŠ 
                     String[] arr_field = content.split(separator);
                     if(arr_field.length+encodeFieldsNames.length != fieldSize) {
                         lossRecordStatement.setObject(1,tableName);
                         lossRecordStatement.setObject(2,content);
                         Boolean isExecute= lossRecordStatement.execute();
                         conn.commit();
-                        log.warn("Êı¾İ´íÎó£º{}", content );
-                        log.warn("´íÎóÊı¾İÊÇ·ñ±£´æ³É¹¦£º"+isExecute);
+                        log.warn("æ•°æ®é”™è¯¯ï¼š{}", content );
+                        log.warn("é”™è¯¯æ•°æ®æ˜¯å¦ä¿å­˜æˆåŠŸï¼š"+isExecute);
                         break;
                     }
 
                     for(int j = 1; j <= arr_field.length; j++) {
                         preparedStatement.setObject(j, arr_field[j - 1]);
                     }
-                    //ĞÂÔöµÄ±àÂë×Ö¶Î¼ÓÈë
+                    //æ–°å¢çš„ç¼–ç å­—æ®µåŠ å…¥
                     for(int j=1;j<=encodeFieldsNames.length;j++){
-                        //ĞèÒªÌí¼Ó±àÂëµÄ×Ö¶ÎÃû³Æ
+                        //éœ€è¦æ·»åŠ ç¼–ç çš„å­—æ®µåç§°
                         String encodeFieldsName=encodeFieldsNames[j-1];
-                        //ĞèÒªÌí¼Ó±àÂëµÄ×Ö¶ÎµÄÏÂ±ê
+                        //éœ€è¦æ·»åŠ ç¼–ç çš„å­—æ®µçš„ä¸‹æ ‡
                         Integer fieldIndex= fieldsNamesList.indexOf(encodeFieldsName);
                         preparedStatement.setObject(arr_field.length+j,
                                 encodeMap.get(arr_field[fieldIndex]));
@@ -240,26 +240,26 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
 //                event = channel.take();
 //                if (event != null) {
 //                    content = new String(event.getBody());
-//                    // Ìí¼Ó
+//                    // æ·»åŠ 
 //                    String[] arr_field = content.split(separator);
 //                    if(arr_field.length+3 != fieldSize) {
 //                        lossRecordStatement.setObject(1,tableName);
 //                        lossRecordStatement.setObject(2,content);
 //                        Boolean isExecute= lossRecordStatement.execute();
 //                        conn.commit();
-//                        log.warn("Êı¾İ´íÎó£º{}", content );
-//                        log.warn("´íÎóÊı¾İÊÇ·ñ±£´æ³É¹¦£º"+isExecute);
+//                        log.warn("æ•°æ®é”™è¯¯ï¼š{}", content );
+//                        log.warn("é”™è¯¯æ•°æ®æ˜¯å¦ä¿å­˜æˆåŠŸï¼š"+isExecute);
 //                        break;
 //                    }
 //
 //                    for(int j = 1; j <= arr_field.length; j++) {
 //                        preparedStatement.setObject(j, arr_field[j - 1]);
 //                    }
-//                    //ĞÂÔöµÄ±àÂë×Ö¶Î¼ÓÈë
+//                    //æ–°å¢çš„ç¼–ç å­—æ®µåŠ å…¥
 //                    for(int j=1;j<=encodeFieldsNames.length;j++){
-//                        //ĞèÒªÌí¼Ó±àÂëµÄ×Ö¶ÎÃû³Æ
+//                        //éœ€è¦æ·»åŠ ç¼–ç çš„å­—æ®µåç§°
 //                        String encodeFieldsName=encodeFieldsNames[j-1];
-//                        //ĞèÒªÌí¼Ó±àÂëµÄ×Ö¶ÎµÄÏÂ±ê
+//                        //éœ€è¦æ·»åŠ ç¼–ç çš„å­—æ®µçš„ä¸‹æ ‡
 //                        Integer fieldIndex= fieldsNamesList.indexOf(encodeFieldsName);
 //                        preparedStatement.setObject(arr_field.length+j,
 //                                encodeMap.get(arr_field[fieldIndex]));

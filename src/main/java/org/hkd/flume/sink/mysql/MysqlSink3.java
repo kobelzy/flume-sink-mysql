@@ -11,7 +11,7 @@ import java.sql.*;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -19,9 +19,9 @@ import java.util.Map;
  * 创建丢失数据表
  * create table loss_records(id int,target_table varchar(20),record varchar(255)
  */
-public class MysqlSink extends AbstractSink implements Configurable {
+public class MysqlSink3 extends AbstractSink implements Configurable {
 
-    private static Logger log = LoggerFactory.getLogger(MysqlSink.class);
+    private static Logger log = LoggerFactory.getLogger(MysqlSink3.class);
 
     private String hostname;
     private String port;
@@ -40,7 +40,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
     private int fieldSize;
 
     //字典编码映射表
-    private Map<String, Integer> encodeMap = new HashMap<String, Integer>();
+    private Map<String, Integer> encodeMap = new IdentityHashMap<String, Integer>();
     //获取需匹配编码的原始字段名称
     private String encodeFields;
     private String[] encodeFieldsNames;
@@ -54,10 +54,10 @@ public class MysqlSink extends AbstractSink implements Configurable {
     //需要匹配字典编码的字段，从配置文件中获取
     private String dictFields;
     private String[] dictFieldsArr;
-    private Map<String,Integer> dictMap=new HashMap<String,Integer>();
+    private Map<String,Integer> dictMap=new IdentityHashMap<String,Integer>();
     private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
 
-    public MysqlSink() {
+    public MysqlSink3() {
         log.info("start sink service. name : mysql sink.");
     }
 
@@ -185,10 +185,6 @@ public class MysqlSink extends AbstractSink implements Configurable {
         }
         log.info("表[" + tableName + "]对应编码字典长度为：" + encodeMap.size());
         log.info("表[" + tableName + "]对应枚举字典长度为：" + dictMap.size());
-
-                    for (Map.Entry<String, Integer> entry : dictMap.entrySet()) {
-                        System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
-                    }
         dictFieldsArr=dictFields.split(",");
     }
 
@@ -266,7 +262,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
                                     preparedStatement.setString(j + 1, value);
                                     break;
                                 case "DATETIME":
-                                    java.sql.Date valueDate = new java.sql.Date(format.parse(arr_field[j]).getTime());
+                                    Date valueDate = new Date(format.parse(arr_field[j]).getTime());
                                     preparedStatement.setDate(j + 1, valueDate);
                                     break;
                                 default:
