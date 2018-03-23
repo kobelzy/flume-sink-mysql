@@ -44,18 +44,22 @@ public class MysqlSink extends AbstractSink implements Configurable {
     //获取需匹配编码的原始字段名称
     private String encodeFields;
     private String[] encodeFieldsNames;
-    //字典表名称
+    //地域编码表表名称
     private String encodeTableName;
+    //字典表名称
+    private String dictTableName;
     //不合格数据的存储表
     private String lossRecordTableName;
     //不合格数据插入表连接器
     private PreparedStatement lossRecordStatement;
 
     //需要匹配字典编码的字段，从配置文件中获取
-    private String dictFields;
-    private String[] dictFieldsArr;
-    private Map<String, Integer> dictMap = new HashMap<String, Integer>();
+    private Map<String, Map<String, Integer>> dictMap = new HashMap<>();
+    // 需要匹配字典编码的字段在字典中对应的类型值
+    private String field2dictTableName;
+    private Map<String, String> field2dictMap = new HashMap<>();
     private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+    private static SimpleDateFormat UpdateBatchSdf = new SimpleDateFormat("yyyy-MM");
 
     private int batchOfLossRecord = 0;
 
@@ -80,12 +84,11 @@ public class MysqlSink extends AbstractSink implements Configurable {
         Preconditions.checkNotNull(batchSize > 0, "batchSize must be a positive number!!");
         encodeFields = context.getString("encodeFields");
         Preconditions.checkNotNull(encodeFields, "encodeFields must be set!!");
-        encodeTableName = context.getString("encodeTableName");
-        Preconditions.checkNotNull(encodeTableName, "encodeTableName must be set!!");
-        lossRecordTableName = context.getString("lossRecordTableName");
-        Preconditions.checkNotNull(lossRecordTableName, "lossRecordTableName must be set!!");
+        encodeTableName = context.getString("encodeTableName", "base_area");
+        dictTableName = context.getString("dictTableName", "data_type_def");
+        lossRecordTableName = context.getString("lossRecordTableName", "loss_records");
         separator = context.getString("separator", ",");
-        dictFields = context.getString("dictFields");
+        field2dictTableName = context.getString("field2dictTableName", "data_type_field2type");
 
     }
 
@@ -112,7 +115,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
         try {
             statement = conn.createStatement();
             //创建错误数据存储表
-            statement.execute("CREATE TABLE  IF NOT EXISTS `loss_records` (  `id` int(11) NOT NULL AUTO_INCREMENT, `target_table` varchar(40) DEFAULT NULL," +
+            statement.execute("CREATE TABLE  IF NOT EXISTS " + lossRecordTableName + " (  `id` int(11) NOT NULL AUTO_INCREMENT, `target_table` varchar(40) DEFAULT NULL," +
                     "`date` TIMESTAMP  DEFAULT  CURRENT_TIMESTAMP ,`exception` varchar(40) DEFAULT  NULL ,`record` text DEFAULT NULL,  PRIMARY KEY (`id`))");
             //查询目标表元数据
             ResultSetMetaData rs = statement.executeQuery("select * from " + tableName + " limit 1").getMetaData();
@@ -126,7 +129,6 @@ public class MysqlSink extends AbstractSink implements Configurable {
             e.printStackTrace();
         }
         //删除
-        fieldsNameList.remove("INPUT_BATCH");
         fieldSize = fieldsNameList.size();
         StringBuffer sb = new StringBuffer();
         for (int i = 0; i < fieldSize; i++) {
@@ -164,17 +166,23 @@ public class MysqlSink extends AbstractSink implements Configurable {
 //                }
 //            }
             statement = conn.createStatement();
-            ResultSet rs = statement.executeQuery("select area_Name,area_ID from " + encodeTableName);
+            //获取地域编码表
+            ResultSet rs = statement.executeQuery("select RegionName,OtherName,RegionId from " + encodeTableName);
             while (rs.next()) {
-                encodeMap.put(rs.getString(1), rs.getInt(2));
+                encodeMap.put(rs.getString(1), rs.getInt(3));//获取标准名
+                encodeMap.put(rs.getString(2), rs.getInt(3));//获取别名
             }
-
+            rs.close();
             //获取枚举字典表
-            ResultSet rsDict = statement.executeQuery("select CNNAME,CODE_ID from data_type_def");
-            while (rsDict.next()) {
-                //需要按照value值获取其int类型的ID值，
-                dictMap.put(rsDict.getString(1), rsDict.getInt(2));
+            ResultSet rsDict = statement.executeQuery("select TYPE,CNNAME,CODE_ID from " + dictTableName);
+            dictMap = getdictMap(rsDict, dictMap);
+            rsDict.close();
+            //获取字段对应字典表中的类型字段
+            ResultSet rsField2Dict = statement.executeQuery("select FIELD_NAME,DICT_TYPE from " + field2dictTableName + " where TABLENAME = '" + tableName + "'");
+            while (rsField2Dict.next()) {
+                field2dictMap.put(rsField2Dict.getString(1), rsField2Dict.getString(2));
             }
+            rsField2Dict.close();
         } catch (SQLException e) {
             e.printStackTrace();
             log.error("获取mysql连接失败：{}", e.getMessage());
@@ -188,17 +196,15 @@ public class MysqlSink extends AbstractSink implements Configurable {
         }
         log.info("表[" + tableName + "]对应编码字典长度为：" + encodeMap.size());
         log.info("表[" + tableName + "]对应枚举字典长度为：" + dictMap.size());
-        dictFieldsArr = dictFields.split(",");
     }
 
     public Status process() throws EventDeliveryException {
-
         Status result = Status.READY;
         Channel channel = getChannel();
         Transaction transaction = channel.getTransaction();
         Event event;
         String content;
-
+        String inputBatch = UpdateBatchSdf.format(new java.util.Date());
         transaction.begin();
         try {
             preparedStatement.clearBatch();
@@ -206,75 +212,37 @@ public class MysqlSink extends AbstractSink implements Configurable {
 
                 event = channel.take();
                 if (event != null) {
-                    //测试head
-//                    Map<String, String> head = event.getHeaders();
-//                    for (Map.Entry<String, String> entry : head.entrySet()) {
-//                        System.out.println("Key = " + entry.getKey() + ", Value = " + entry.getValue());
-//                    }
-                    /**头部包含的三个属性
-                     * Key = timestamp, Value = 1521438722310
-                     Key = filePath, Value = /home/hkd3/
-                     Key = fileName, Value = test4.csv
-                     */
                     content = new String(event.getBody());
                     // 添加
                     String[] arr_field = content.split(separator, -1);
-                    if (arr_field.length + encodeFieldsNames.length != fieldSize) {
-                        String exception="数据长度错误，当前数据长度："+arr_field.length+"目标长度："+(fieldSize- encodeFieldsNames.length);
-                        writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, "数据长度错误：{}");
-                        System.out.println("目标数量：" + fieldSize);
+                    //源数据中的n个值+最终结果需要添加编码id的2个或三个值+1个插入批次。
+                    if (arr_field.length + encodeFieldsNames.length + 1 != fieldSize) {
+                        String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length);
+                        writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, exception);
                         break;
                     }
-                    //int部分字段匹配字典边
-                    for (String dictField : dictFieldsArr) {
+                    //int部分字段匹配字典表
+                    for (String dictField : field2dictMap.keySet()) {
                         //获取其对应的下标
                         int index = fieldsNameList.indexOf(dictField);
                         String value = arr_field[index].replace("\"", "");
-                        Integer dicInt = dictMap.get(value);
-//                        System.out.println("下标：" + index + ",字段：" + dictField + ",原始值：" + value + "，对应值：" + dicInt);
+                        //获取当前字段对应的字典中的类型
+                        String dictType = field2dictMap.get(dictField);
+                        Map<String, Integer> value2CodeMap = dictMap.get(dictType);
+                        Integer dictInt;
+                        if(value2CodeMap.containsKey(value)){
+                         dictInt = value2CodeMap.get(value);
+                        }else{
+                            dictInt=-9999;
+                            writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, "未匹配到字典值："+value);
+                        }
                         //获取该值对应的字典
-                        arr_field[index] = String.valueOf(dicInt);
+                        arr_field[index] = String.valueOf(dictInt);
+//                        System.out.println("下标：" + index + ",字段：" + dictField + ",原始值：" + value + "，对应值：" + dictInt);
                     }
-//                    for (int j = 1; j <= arr_field.length; j++) {
-//                        preparedStatement.setObject(j, arr_field[j - 1]);
-//                    }
                     try {
                         //从目标表中获取的字段数要比源数据多3个匹配编码的字段
-                        for (int j = 0; j < fieldSize - encodeFieldsNames.length; j++) {
-
-                            String dataType = fieldsTypeList.get(j);
-                            String value = arr_field[j].replace("\"", "");
-                            switch (dataType) {
-                                case "TINYINT":
-                                    int values = Integer.valueOf(value);
-                                    preparedStatement.setInt(j + 1, values);
-                                    break;
-                                case "INT":
-                                    int valueInt = Integer.valueOf(value);
-                                    preparedStatement.setInt(j + 1, valueInt);
-                                    break;
-                                case "DOUBLE":
-                                    double valueDouble = Double.valueOf(value);
-                                    preparedStatement.setDouble(j + 1, valueDouble);
-                                    break;
-                                case "FLOAT":
-                                    float valueFloat = Float.valueOf(value);
-                                    preparedStatement.setFloat(j + 1, valueFloat);
-                                case "CHAR":
-                                    char valueChar = value.charAt(0);
-                                    preparedStatement.setString(j + 1, value);
-                                    break;
-                                case "DATETIME":
-                                    java.sql.Date valueDate = new java.sql.Date(format.parse(arr_field[j]).getTime());
-                                    preparedStatement.setDate(j + 1, valueDate);
-                                    break;
-                                default:
-
-                                    preparedStatement.setString(j + 1, value);
-                                    break;
-                            }
-
-                        }
+                        dataClean(preparedStatement, arr_field, fieldsTypeList);
                         //新增的编码字段加入
                         for (int j = 0; j < encodeFieldsNames.length; j++) {
                             //需要添加编码的字段名称
@@ -285,15 +253,19 @@ public class MysqlSink extends AbstractSink implements Configurable {
                             preparedStatement.setInt(arr_field.length + j + 1, encodeValue);
                         }
                         //添加批次时间
-//                        preparedStatement.setString(fieldSize,);
+                        preparedStatement.setString(fieldSize, inputBatch);
                         preparedStatement.addBatch();
                     } catch (ParseException e) {
                         writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, e.getMessage());
-                        e.printStackTrace();
+//                        e.printStackTrace();
+                        continue;
+                    } catch (SQLException e) {
+                        writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, e.getMessage());
+//                        e.printStackTrace();
                         continue;
                     } catch (Exception e) {
                         writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, e.getMessage());
-                        e.printStackTrace();
+//                        e.printStackTrace();
                         continue;
                     }
 
@@ -342,65 +314,6 @@ public class MysqlSink extends AbstractSink implements Configurable {
             }
         }
     }
-/*
-    private Status insertRecord(Channel channel, String tableName) {
-        Status result = Status.READY;
-        Transaction transaction = channel.getTransaction();
-        Event event;
-        String content;
-        transaction.begin();
-        try {
-            preparedStatement.clearBatch();
-            for (int i = 0; i < batchSize; i++) {
-                event = channel.take();
-                if (event != null) {
-
-                    content = new String(event.getBody());
-                    // 添加
-                    String[] arr_field = content.split(separator);
-                    if (arr_field.length + 3 != fieldSize) {
-                        lossRecordStatement.setObject(1, tableName);
-                        lossRecordStatement.setObject(2, content);
-                        Boolean isExecute = lossRecordStatement.execute();
-                        conn.commit();
-                        log.warn("数据错误：{}", content);
-                        log.warn("错误数据是否保存成功：" + isExecute);
-                        break;
-                    }
-
-                    for (int j = 1; j <= arr_field.length; j++) {
-                        preparedStatement.setObject(j, arr_field[j - 1]);
-                    }
-                    //新增的编码字段加入
-                    for (int j = 1; j <= encodeFieldsNames.length; j++) {
-                        //需要添加编码的字段名称
-                        String encodeFieldsName = encodeFieldsNames[j - 1];
-                        //需要添加编码的字段的下标
-                        Integer fieldIndex = fieldsNamesList.indexOf(encodeFieldsName);
-                        preparedStatement.setObject(arr_field.length + j,
-                                encodeMap.get(arr_field[fieldIndex]));
-                    }
-                    preparedStatement.addBatch();
-                } else {
-                    result = Status.BACKOFF;
-                    break;
-                }
-                if (i == batchSize - 1) {
-                    preparedStatement.executeBatch();
-                    conn.commit();
-                }
-            }
-            transaction.commit();
-
-        } catch (SQLException e) {
-            transaction.rollback();
-            log.error("Failed to commit transaction." + "Transaction rolled back.", e);
-
-        } finally {
-            transaction.close();
-        }
-        return result;
-    }*/
 
     /**
      * 拼接字符串
@@ -418,29 +331,128 @@ public class MysqlSink extends AbstractSink implements Configurable {
         return sb.toString();
     }
 
+    /**
+     * 错误数据写入错误表中
+     *
+     * @param lossRecordStatement
+     * @param conn
+     * @param record
+     * @param tableName
+     * @param batchOfLossRecord
+     * @param exception
+     */
     private static void writeLossRecords(PreparedStatement lossRecordStatement, Connection conn, String record, String tableName, int batchOfLossRecord, String exception) {
-
         try {
             lossRecordStatement.setString(1, tableName);
             lossRecordStatement.setString(2, exception);
             lossRecordStatement.setString(3, record);
             lossRecordStatement.execute();
             conn.commit();
-            if (batchOfLossRecord < batchSize) {
-                lossRecordStatement.addBatch();
-            } else {
-                lossRecordStatement.executeBatch();
-                conn.commit();
-            }
+//            if (batchOfLossRecord < batchSize) {
+//                lossRecordStatement.addBatch();
+//            } else {
+//                lossRecordStatement.executeBatch();
+//                conn.commit();
+//                lossRecordStatement.clearBatch();
+//                batchOfLossRecord = 0;
+//            }
         } catch (SQLException e) {
-            e.printStackTrace();
             log.error("有错误数据，且写入错误库失败:" + e.getMessage());
+            e.printStackTrace();
         }
         log.warn(exception, record);
         batchOfLossRecord++;
     }
 
-    ;
+    /**
+     * 获取嵌套的字典表，<字段Type,<字段值，字段字典值>>
+     *
+     * @param rs
+     */
+    private Map<String, Map<String, Integer>> getdictMap(ResultSet rs, Map<String, Map<String, Integer>> dictMap) {
+        try {
+            while (rs.next()) {
+                String fieldName = rs.getString(1);
+                String dictValue = rs.getString(2);
+                Integer dictCode = rs.getInt(3);
+                if (dictMap.containsKey(fieldName)) {
+                    dictMap.get(fieldName).put(dictValue, dictCode);
+                } else {
+                    Map<String, Integer> dictValueMap = new HashMap<>();
+                    dictValueMap.put(dictValue, dictCode);
+                    dictMap.put(fieldName, dictValueMap);
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return dictMap;
 
+    }
+
+    /**
+     * 从csv中获取到的数据根据目标字段类型进行转换，并抛出异常
+     *
+     * @param preparedStatement
+     * @param arr_field
+     * @param fieldsTypeList
+     * @throws SQLException
+     * @throws ParseException
+     */
+    private static void dataClean(PreparedStatement preparedStatement, String[] arr_field, List<String> fieldsTypeList) throws SQLException, ParseException {
+        for (int j = 0; j < arr_field.length; j++) {
+            String dataType = fieldsTypeList.get(j);
+            String value = arr_field[j].replace("\"", "");
+            switch (dataType) {
+                case "TINYINT":
+                    int valueTinyInt;
+                    if (value == null || value.equals("")) {
+                        valueTinyInt = -9999;
+                    } else {
+                        valueTinyInt = Integer.valueOf(value);
+                    }
+                    preparedStatement.setInt(j + 1, valueTinyInt);
+                    break;
+                case "INT":
+                    int valueInt;
+                    if (value == null || value.equals("")) {
+                        valueInt = -9999;
+                    } else {
+                        valueInt = Integer.valueOf(value);
+                    }
+                    preparedStatement.setInt(j + 1, valueInt);
+                    break;
+                case "DOUBLE":
+                    double valueDouble;
+                    if (value == null || value.equals("")) {
+                        valueDouble = -9999.0;
+                    } else {
+                        valueDouble = Double.valueOf(value);
+                    }
+                    preparedStatement.setDouble(j + 1, valueDouble);
+                    break;
+                case "FLOAT":
+                    float valueFloat;
+                    if (value == null || value.equals("")) {
+                        valueFloat = -9999;
+                    } else {
+                        valueFloat = Float.valueOf(value);
+                    }
+                    preparedStatement.setFloat(j + 1, valueFloat);
+                case "CHAR":
+                    char valueChar = value.charAt(0);
+                    preparedStatement.setString(j + 1, value);
+                    break;
+                case "DATETIME":
+                    java.sql.Date valueDate = new java.sql.Date(format.parse(arr_field[j]).getTime());
+                    preparedStatement.setDate(j + 1, valueDate);
+                    break;
+                default:
+                    preparedStatement.setString(j + 1, value);
+                    break;
+            }
+
+        }
+    }
 
 }
