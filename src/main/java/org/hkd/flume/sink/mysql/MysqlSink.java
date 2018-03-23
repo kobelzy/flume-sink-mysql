@@ -346,16 +346,14 @@ public class MysqlSink extends AbstractSink implements Configurable {
             lossRecordStatement.setString(1, tableName);
             lossRecordStatement.setString(2, exception);
             lossRecordStatement.setString(3, record);
-            lossRecordStatement.execute();
-            conn.commit();
-//            if (batchOfLossRecord < batchSize) {
-//                lossRecordStatement.addBatch();
-//            } else {
-//                lossRecordStatement.executeBatch();
-//                conn.commit();
-//                lossRecordStatement.clearBatch();
-//                batchOfLossRecord = 0;
-//            }
+            if (batchOfLossRecord < batchSize) {
+                lossRecordStatement.addBatch();
+            } else {
+                lossRecordStatement.executeBatch();
+                conn.commit();
+                lossRecordStatement.clearBatch();
+                batchOfLossRecord = 0;
+            }
         } catch (SQLException e) {
             log.error("有错误数据，且写入错误库失败:" + e.getMessage());
             e.printStackTrace();
