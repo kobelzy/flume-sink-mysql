@@ -31,6 +31,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
     private String password;
     private PreparedStatement preparedStatement;
     private Connection conn;
+    private Connection lossRecordConn;
     private static int batchSize;
     private List<String> fieldsNameList = new ArrayList<String>();
     //用于保存目标表数据类型的List
@@ -61,7 +62,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
     private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
     private static SimpleDateFormat UpdateBatchSdf = new SimpleDateFormat("yyyy-MM");
 
-    private int batchOfLossRecord = 0;
+     private int batchOfLossRecord = 0;
 
     public MysqlSink() {
         log.info("start sink service. name : mysql sink.");
@@ -105,6 +106,8 @@ public class MysqlSink extends AbstractSink implements Configurable {
         try {
             conn = DriverManager.getConnection(url, user, password);
             conn.setAutoCommit(false);
+            lossRecordConn = DriverManager.getConnection(url, user, password);
+            lossRecordConn.setAutoCommit(false);
         } catch (SQLException e) {
             e.printStackTrace();
             log.error("获取mysql连接失败：{}", e.getMessage());
@@ -145,7 +148,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
         try {
             preparedStatement = conn.prepareStatement(sql);
             //用于插入不合格数据,
-            lossRecordStatement = conn.prepareStatement("insert into " + lossRecordTableName + " (target_table,exception,record) values (?,?,?)");
+            lossRecordStatement = lossRecordConn.prepareStatement("insert into " + lossRecordTableName + " (target_table,exception,record) values (?,?,?)");
         } catch (SQLException e) {
             e.printStackTrace();
             log.error("获取mysql连接失败：{}", e.getMessage());
@@ -218,7 +221,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     //源数据中的n个值+最终结果需要添加编码id的2个或三个值+1个插入批次。
                     if (arr_field.length + encodeFieldsNames.length + 1 != fieldSize) {
                         String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length);
-                        writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, exception);
+                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, exception);
                         break;
                     }
                     //int部分字段匹配字典表
@@ -234,7 +237,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
                          dictInt = value2CodeMap.get(value);
                         }else{
                             dictInt=-9999;
-                            writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, "未匹配到字典值："+value);
+                            batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, "未匹配到字典值："+value);
                         }
                         //获取该值对应的字典
                         arr_field[index] = String.valueOf(dictInt);
@@ -254,17 +257,18 @@ public class MysqlSink extends AbstractSink implements Configurable {
                         }
                         //添加批次时间
                         preparedStatement.setString(fieldSize, inputBatch);
+                        log.debug(content);
                         preparedStatement.addBatch();
                     } catch (ParseException e) {
-                        writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, e.getMessage());
+                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
 //                        e.printStackTrace();
                         continue;
                     } catch (SQLException e) {
-                        writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, e.getMessage());
+                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
 //                        e.printStackTrace();
                         continue;
                     } catch (Exception e) {
-                        writeLossRecords(lossRecordStatement, conn, content, tableName, batchOfLossRecord, e.getMessage());
+                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
 //                        e.printStackTrace();
                         continue;
                     }
@@ -284,12 +288,6 @@ public class MysqlSink extends AbstractSink implements Configurable {
             log.error("Failed to commit transaction." + "Transaction rolled back.", e);
 
         } finally {
-            try {
-                preparedStatement.executeBatch();
-                conn.commit();
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
             transaction.close();
         }
         return result;
@@ -300,15 +298,27 @@ public class MysqlSink extends AbstractSink implements Configurable {
         if (preparedStatement != null) {
             try {
                 preparedStatement.close();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+        if (lossRecordStatement != null) {
+            try {
                 lossRecordStatement.close();
             } catch (SQLException e) {
                 e.printStackTrace();
             }
         }
-
         if (conn != null) {
             try {
                 conn.close();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+        if (lossRecordConn != null) {
+            try {
+                lossRecordConn.close();
             } catch (SQLException e) {
                 e.printStackTrace();
             }
@@ -341,7 +351,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
      * @param batchOfLossRecord
      * @param exception
      */
-    private static void writeLossRecords(PreparedStatement lossRecordStatement, Connection conn, String record, String tableName, int batchOfLossRecord, String exception) {
+    private static int writeLossRecords(PreparedStatement lossRecordStatement, Connection conn, String record, String tableName, int batchOfLossRecord, String exception) {
         try {
             lossRecordStatement.setString(1, tableName);
             lossRecordStatement.setString(2, exception);
@@ -358,8 +368,8 @@ public class MysqlSink extends AbstractSink implements Configurable {
             log.error("有错误数据，且写入错误库失败:" + e.getMessage());
             e.printStackTrace();
         }
-        log.warn(exception, record);
-        batchOfLossRecord++;
+        log.warn("数据错误："+ exception);
+        return ++batchOfLossRecord;
     }
 
     /**
