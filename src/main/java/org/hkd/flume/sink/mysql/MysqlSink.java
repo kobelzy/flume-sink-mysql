@@ -277,15 +277,19 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     result = Status.BACKOFF;
                     break;
                 }
+//                System.out.println("批次："+i);
                 if (i == batchSize - 1) {
                     preparedStatement.executeBatch();
                     conn.commit();
                 }
             }
+
+
             transaction.commit();
         } catch (SQLException e) {
             transaction.rollback();
-            log.error("Failed to commit transaction." + "Transaction rolled back.", e);
+            log.error("警告，Flume事务批次提交失败，执行rollback，必须解决，否则会堵塞Source队列",e);
+//            log.error("Failed to commit transaction." + "Transaction rolled back.", e);
 
         } finally {
             transaction.close();
