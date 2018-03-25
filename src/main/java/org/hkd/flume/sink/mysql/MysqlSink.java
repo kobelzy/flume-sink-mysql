@@ -237,7 +237,8 @@ public class MysqlSink extends AbstractSink implements Configurable {
                          dictInt = value2CodeMap.get(value);
                         }else{
                             dictInt=-9999;
-                            batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, "未匹配到字典值："+value);
+//                            batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, "未匹配到字典值："+value);
+                            log.error("未匹配到字典值："+value);
                         }
                         //获取该值对应的字典
                         arr_field[index] = String.valueOf(dictInt);
@@ -246,13 +247,14 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     try {
                         //从目标表中获取的字段数要比源数据多3个匹配编码的字段
                         dataClean(preparedStatement, arr_field, fieldsTypeList);
-                        //新增的编码字段加入
+                        //新增的地域编码字段加入
                         for (int j = 0; j < encodeFieldsNames.length; j++) {
                             //需要添加编码的字段名称
                             String encodeFieldsName = encodeFieldsNames[j];
                             //需要添加编码的字段的下标
                             int fieldIndex = fieldsNameList.indexOf(encodeFieldsName);
-                            Integer encodeValue = encodeMap.get(arr_field[fieldIndex].replace("\"", ""));
+                            String field=arr_field[fieldIndex].replace("\"", "");
+                            Integer encodeValue = encodeMap.getOrDefault(field,-9999);
                             preparedStatement.setInt(arr_field.length + j + 1, encodeValue);
                         }
                         //添加批次时间
