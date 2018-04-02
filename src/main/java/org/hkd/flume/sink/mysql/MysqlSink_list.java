@@ -1,6 +1,7 @@
 package org.hkd.flume.sink.mysql;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
 import org.apache.flume.*;
 import org.apache.flume.conf.Configurable;
 import org.apache.flume.sink.AbstractSink;
@@ -27,9 +28,9 @@ import java.util.Map;
  *      针对空值，数值类型使用-9999代替。
  * 5：对于转型失败、匹配字典失败的数据进行另外的错误数据记录，单独放一张表中。
  */
-public class MysqlSink_Copy extends AbstractSink implements Configurable {
+public class MysqlSink_list extends AbstractSink implements Configurable {
 
-    private static Logger log = LoggerFactory.getLogger(MysqlSink_Copy.class);
+    private static Logger log = LoggerFactory.getLogger(MysqlSink_list.class);
 
     private String hostname;
     private String port;
@@ -67,13 +68,13 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
     // 需要匹配字典编码的字段在字典中对应的类型值
     private String field2dictTableName;
     private Map<String, String> field2dictMap = new HashMap<>();
-//    private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+    //    private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
     private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd");
     private static SimpleDateFormat UpdateBatchSdf = new SimpleDateFormat("yyyyMM");
 
-     private int batchOfLossRecord = 0;
+    private int batchOfLossRecord = 0;
 
-    public MysqlSink_Copy() {
+    public MysqlSink_list() {
         log.info("start sink service. name : mysql sink.");
     }
 
@@ -92,7 +93,7 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
         Preconditions.checkNotNull(password, "password must be set!!");
         batchSize = context.getInteger("batchSize", 100);
         Preconditions.checkNotNull(batchSize > 0, "batchSize must be a positive number!!");
-        encodeFields = context.getString("encodeFields","");
+        encodeFields = context.getString("encodeFields", "");
         encodeTableName = context.getString("encodeTableName", "base_area");
         dictTableName = context.getString("dictTableName", "data_type_def");
         lossRecordTableName = context.getString("lossRecordTableName", "loss_records");
@@ -123,9 +124,9 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
         }
         //获取插入目标表的数据格式
         Statement statement = null;
-        ResultSet rs=null;
-        ResultSet rsDict=null;
-        ResultSet rsField2Dict=null;
+        ResultSet rs = null;
+        ResultSet rsDict = null;
+        ResultSet rsField2Dict = null;
         try {
             statement = conn.createStatement();
             //创建错误数据存储表
@@ -181,18 +182,18 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
 //            }
             statement = conn.createStatement();
             //获取地域编码表
-             rs = statement.executeQuery("select RegionName,OtherName,RegionId from " + encodeTableName);
+            rs = statement.executeQuery("select RegionName,OtherName,RegionId from " + encodeTableName);
             while (rs.next()) {
                 encodeMap.put(rs.getString(1), rs.getInt(3));//获取标准名
                 encodeMap.put(rs.getString(2), rs.getInt(3));//获取别名
             }
 
             //获取枚举字典表
-             rsDict = statement.executeQuery("select TYPE,CNNAME,CODE_ID from " + dictTableName);
+            rsDict = statement.executeQuery("select TYPE,CNNAME,CODE_ID from " + dictTableName);
             dictMap = getdictMap(rsDict, dictMap);
 
             //获取字段对应字典表中的类型字段
-             rsField2Dict = statement.executeQuery("select FIELD_NAME,DICT_TYPE from " + field2dictTableName + " where TABLENAME = '" + tableName + "'");
+            rsField2Dict = statement.executeQuery("select FIELD_NAME,DICT_TYPE from " + field2dictTableName + " where TABLENAME = '" + tableName + "'");
             while (rsField2Dict.next()) {
                 field2dictMap.put(rsField2Dict.getString(1), rsField2Dict.getString(2));
             }
@@ -208,7 +209,7 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
             } catch (SQLException e) {
                 e.printStackTrace();
             }
-            if(statement!=null) {
+            if (statement != null) {
                 try {
                     statement.close();
                 } catch (SQLException e) {
@@ -227,19 +228,32 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
         Event event;
         String content;
         String inputBatch = UpdateBatchSdf.format(new java.util.Date());
+        List<String> actions = Lists.newArrayList();
         try {
-        transaction.begin();
+            transaction.begin();
             preparedStatement.clearBatch();
+
+            /**
+             * 修改部分
+             */
             for (int i = 0; i < batchSize; i++) {
                 event = channel.take();
                 if (event != null) {
                     content = new String(event.getBody());
-                    // 添加
-                    String[] arr_field = content.split(separator, -1);
+                    actions.add(content);
+                } else {
+                    result = Status.BACKOFF;
+                    break;
+                }
+            }
+            if (actions.size() > 0) {
+                preparedStatement.clearBatch();
+                for (String temp : actions) {
+                    String[] arr_field = temp.split(separator, -1);
                     //源数据中的n个值+最终结果需要添加编码id的2个或三个值+1个插入批次。
                     if (arr_field.length + encodeFieldsNames.length + 1 != fieldSize) {
-                        String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length-1);
-                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, exception);
+                        String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length - 1);
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, temp, tableName, batchOfLossRecord, exception);
                         break;
                     }
                     //int部分字段匹配字典表
@@ -251,12 +265,12 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
                         String dictType = field2dictMap.get(dictField);
                         Map<String, Integer> value2CodeMap = dictMap.get(dictType);
                         Integer dictInt;
-                        if(value2CodeMap.containsKey(value)){
-                         dictInt = value2CodeMap.get(value);
-                        }else{
-                            dictInt=-9999;
+                        if (value2CodeMap.containsKey(value)) {
+                            dictInt = value2CodeMap.get(value);
+                        } else {
+                            dictInt = -9999;
 //                            batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, "未匹配到字典值："+value);
-                            log.error("未匹配到字典值："+value);
+                            log.error("未匹配到字典值：" + value);
                         }
                         //获取该值对应的字典
                         arr_field[index] = String.valueOf(dictInt);
@@ -271,8 +285,76 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
                             String encodeFieldsName = encodeFieldsNames[j];
                             //需要添加编码的字段的下标
                             int fieldIndex = fieldsNameList.indexOf(encodeFieldsName);
-                            String field=arr_field[fieldIndex].replace("\"", "");
-                            Integer encodeValue = encodeMap.getOrDefault(field,-9999);
+                            String field = arr_field[fieldIndex].replace("\"", "");
+                            Integer encodeValue = encodeMap.getOrDefault(field, -9999);
+                            preparedStatement.setInt(arr_field.length + j + 1, encodeValue);
+                        }
+                        //添加批次时间
+                        preparedStatement.setString(fieldSize, inputBatch);
+                        log.debug(temp);
+                        preparedStatement.addBatch();
+                    } catch (ParseException e) {
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, temp, tableName, batchOfLossRecord, e.getMessage());
+//                        e.printStackTrace();
+                        continue;
+                    } catch (SQLException e) {
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, temp, tableName, batchOfLossRecord, e.getMessage());
+//                        e.printStackTrace();
+                        continue;
+                    } catch (Exception e) {
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, temp, tableName, batchOfLossRecord, e.getMessage());
+//                        e.printStackTrace();
+                        continue;
+                    }
+                    preparedStatement.executeBatch();
+
+                    conn.commit();
+                }
+            }
+
+/*            for (int i = 0; i < batchSize; i++) {
+                event = channel.take();
+                if (event != null) {
+                    content = new String(event.getBody());
+                    // 添加
+                    String[] arr_field = content.split(separator, -1);
+                    //源数据中的n个值+最终结果需要添加编码id的2个或三个值+1个插入批次。
+                    if (arr_field.length + encodeFieldsNames.length + 1 != fieldSize) {
+                        String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length - 1);
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, exception);
+                        break;
+                    }
+                    //int部分字段匹配字典表
+                    for (String dictField : field2dictMap.keySet()) {
+                        //获取其对应的下标
+                        int index = fieldsNameList.indexOf(dictField);
+                        String value = arr_field[index].replace("\"", "");
+                        //获取当前字段对应的字典中的类型
+                        String dictType = field2dictMap.get(dictField);
+                        Map<String, Integer> value2CodeMap = dictMap.get(dictType);
+                        Integer dictInt;
+                        if (value2CodeMap.containsKey(value)) {
+                            dictInt = value2CodeMap.get(value);
+                        } else {
+                            dictInt = -9999;
+//                            batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, "未匹配到字典值："+value);
+                            log.error("未匹配到字典值：" + value);
+                        }
+                        //获取该值对应的字典
+                        arr_field[index] = String.valueOf(dictInt);
+//                        System.out.println("下标：" + index + ",字段：" + dictField + ",原始值：" + value + "，对应值：" + dictInt);
+                    }
+                    try {
+                        //从目标表中获取的字段数要比源数据多3个匹配编码的字段
+                        dataClean(preparedStatement, arr_field, fieldsTypeList);
+                        //新增的地域编码字段加入
+                        for (int j = 0; j < encodeFieldsNames.length; j++) {
+                            //需要添加编码的字段名称
+                            String encodeFieldsName = encodeFieldsNames[j];
+                            //需要添加编码的字段的下标
+                            int fieldIndex = fieldsNameList.indexOf(encodeFieldsName);
+                            String field = arr_field[fieldIndex].replace("\"", "");
+                            Integer encodeValue = encodeMap.getOrDefault(field, -9999);
                             preparedStatement.setInt(arr_field.length + j + 1, encodeValue);
                         }
                         //添加批次时间
@@ -280,15 +362,15 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
                         log.debug(content);
                         preparedStatement.addBatch();
                     } catch (ParseException e) {
-                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
 //                        e.printStackTrace();
                         continue;
                     } catch (SQLException e) {
-                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
 //                        e.printStackTrace();
                         continue;
                     } catch (Exception e) {
-                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
 //                        e.printStackTrace();
                         continue;
                     }
@@ -302,16 +384,16 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
                     preparedStatement.executeBatch();
                     conn.commit();
                 }
-            }
+            }*/
             transaction.commit();
         } catch (SQLException e) {
-                transaction.rollback();
-            log.error("警告，Flume事务批次提交失败，执行rollback，必须解决，否则会堵塞Source队列",e);
+            transaction.rollback();
+            log.error("警告，Flume事务批次提交失败，执行rollback，必须解决，否则会堵塞Source队列", e);
             result = Status.BACKOFF;
         } finally {
-                transaction.close();
+            transaction.close();
         }
-                log.info("表["+tableName+"]数据导入中.....");
+        log.info("表[" + tableName + "]数据导入中.....");
         return result;
     }
 
@@ -391,7 +473,7 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
             log.error("有错误数据，且写入错误库失败:" + e.getMessage());
             e.printStackTrace();
         }
-        log.warn("数据错误："+ exception);
+        log.warn("数据错误：" + exception);
         return ++batchOfLossRecord;
     }
 

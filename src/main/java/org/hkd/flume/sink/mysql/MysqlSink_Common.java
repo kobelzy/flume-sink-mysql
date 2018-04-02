@@ -16,20 +16,12 @@ import java.util.List;
 import java.util.Map;
 
 /***
- * 为项目设计，包含的功能：
- * 1：获取目标表的字段以及数据类型，对每一条数据做数据过滤以及数据校验
- * 2：针对不同表的fieldEncode，匹配其地域编码，地域编码由一个单层map构成
- * 3：针对不同表的field2dict，匹配其字典编码，将String转换成int值存储，由双层map构成，需要匹配对应的字段
- *      （1）需要读取field2dictTableName，当前表需要匹配字典的字段及其在字典总表中对应的字段（由于字典总编对于相同的字典进行了聚合，但是仍有重复字段，所以需要进行转换）
- *      （2）需要读取字典表总表，读取三个字段：字段名称、源值、编码值
- *      （3）匹配每个值对应的编码值，并重新写入到数组中
- * 4：针对字段格式进行了数据校验，对于转Int、Double、Float、Tyint格式的数据如果无法成功转换，直接写入失败数据
- *      针对空值，数值类型使用-9999代替。
- * 5：对于转型失败、匹配字典失败的数据进行另外的错误数据记录，单独放一张表中。
+ * 创建丢失数据表
+ * create table loss_records(id int,target_table varchar(20),record varchar(255)
  */
-public class MysqlSink_Copy extends AbstractSink implements Configurable {
+public class MysqlSink_Common extends AbstractSink implements Configurable {
 
-    private static Logger log = LoggerFactory.getLogger(MysqlSink_Copy.class);
+    private static Logger log = LoggerFactory.getLogger(MysqlSink_Common.class);
 
     private String hostname;
     private String port;
@@ -67,13 +59,12 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
     // 需要匹配字典编码的字段在字典中对应的类型值
     private String field2dictTableName;
     private Map<String, String> field2dictMap = new HashMap<>();
-//    private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
-    private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd");
-    private static SimpleDateFormat UpdateBatchSdf = new SimpleDateFormat("yyyyMM");
+    private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+    private static SimpleDateFormat UpdateBatchSdf = new SimpleDateFormat("yyyy-MM");
 
      private int batchOfLossRecord = 0;
 
-    public MysqlSink_Copy() {
+    public MysqlSink_Common() {
         log.info("start sink service. name : mysql sink.");
     }
 
@@ -123,21 +114,18 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
         }
         //获取插入目标表的数据格式
         Statement statement = null;
-        ResultSet rs=null;
-        ResultSet rsDict=null;
-        ResultSet rsField2Dict=null;
         try {
             statement = conn.createStatement();
             //创建错误数据存储表
             statement.execute("CREATE TABLE  IF NOT EXISTS " + lossRecordTableName + " (  `id` int(11) NOT NULL AUTO_INCREMENT, `target_table` varchar(40) DEFAULT NULL," +
                     "`date` TIMESTAMP  DEFAULT  CURRENT_TIMESTAMP ,`exception` varchar(40) DEFAULT  NULL ,`record` text DEFAULT NULL,  PRIMARY KEY (`id`))");
             //查询目标表元数据
-            ResultSetMetaData rsMetaData = statement.executeQuery("select * from " + tableName + " limit 1").getMetaData();
-            for (int i = 0; i < rsMetaData.getColumnCount(); i++) {
+            ResultSetMetaData rs = statement.executeQuery("select * from " + tableName + " limit 1").getMetaData();
+            for (int i = 0; i < rs.getColumnCount(); i++) {
                 //获取字段数据格式
-                fieldsTypeList.add(rsMetaData.getColumnTypeName(i + 1));
+                fieldsTypeList.add(rs.getColumnTypeName(i + 1));
                 //获取字段名称呢个
-                fieldsNameList.add(rsMetaData.getColumnName(i + 1));
+                fieldsNameList.add(rs.getColumnName(i + 1));
             }
         } catch (SQLException e) {
             e.printStackTrace();
@@ -181,39 +169,31 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
 //            }
             statement = conn.createStatement();
             //获取地域编码表
-             rs = statement.executeQuery("select RegionName,OtherName,RegionId from " + encodeTableName);
+            ResultSet rs = statement.executeQuery("select RegionName,OtherName,RegionId from " + encodeTableName);
             while (rs.next()) {
                 encodeMap.put(rs.getString(1), rs.getInt(3));//获取标准名
                 encodeMap.put(rs.getString(2), rs.getInt(3));//获取别名
             }
-
+            rs.close();
             //获取枚举字典表
-             rsDict = statement.executeQuery("select TYPE,CNNAME,CODE_ID from " + dictTableName);
+            ResultSet rsDict = statement.executeQuery("select TYPE,CNNAME,CODE_ID from " + dictTableName);
             dictMap = getdictMap(rsDict, dictMap);
-
+            rsDict.close();
             //获取字段对应字典表中的类型字段
-             rsField2Dict = statement.executeQuery("select FIELD_NAME,DICT_TYPE from " + field2dictTableName + " where TABLENAME = '" + tableName + "'");
+            ResultSet rsField2Dict = statement.executeQuery("select FIELD_NAME,DICT_TYPE from " + field2dictTableName + " where TABLENAME = '" + tableName + "'");
             while (rsField2Dict.next()) {
                 field2dictMap.put(rsField2Dict.getString(1), rsField2Dict.getString(2));
             }
+            rsField2Dict.close();
         } catch (SQLException e) {
             e.printStackTrace();
             log.error("获取mysql连接失败：{}", e.getMessage());
             System.exit(1);
         } finally {
             try {
-                rs.close();
-                rsField2Dict.close();
-                rsDict.close();
+                statement.close();
             } catch (SQLException e) {
                 e.printStackTrace();
-            }
-            if(statement!=null) {
-                try {
-                    statement.close();
-                } catch (SQLException e) {
-                    e.printStackTrace();
-                }
             }
         }
         log.info("表[" + tableName + "]对应编码字典长度为：" + encodeMap.size());
@@ -227,10 +207,11 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
         Event event;
         String content;
         String inputBatch = UpdateBatchSdf.format(new java.util.Date());
-        try {
         transaction.begin();
+        try {
             preparedStatement.clearBatch();
             for (int i = 0; i < batchSize; i++) {
+
                 event = channel.take();
                 if (event != null) {
                     content = new String(event.getBody());
@@ -238,7 +219,7 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
                     String[] arr_field = content.split(separator, -1);
                     //源数据中的n个值+最终结果需要添加编码id的2个或三个值+1个插入批次。
                     if (arr_field.length + encodeFieldsNames.length + 1 != fieldSize) {
-                        String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length-1);
+                        String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length);
                         batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, exception);
                         break;
                     }
@@ -303,21 +284,22 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
                     conn.commit();
                 }
             }
+
+
             transaction.commit();
         } catch (SQLException e) {
-                transaction.rollback();
+            transaction.rollback();
             log.error("警告，Flume事务批次提交失败，执行rollback，必须解决，否则会堵塞Source队列",e);
-            result = Status.BACKOFF;
+//            log.error("Failed to commit transaction." + "Transaction rolled back.", e);
+
         } finally {
-                transaction.close();
+            transaction.close();
         }
-                log.info("表["+tableName+"]数据导入中.....");
         return result;
     }
 
     public void stop() {
         super.stop();
-
         if (preparedStatement != null) {
             try {
                 preparedStatement.close();
@@ -475,7 +457,7 @@ public class MysqlSink_Copy extends AbstractSink implements Configurable {
                     preparedStatement.setString(j + 1, value);
                     break;
                 case "DATETIME":
-                    Date valueDate = new Date(format.parse(value).getTime());
+                    Date valueDate = new Date(format.parse(arr_field[j]).getTime());
                     preparedStatement.setDate(j + 1, valueDate);
                     break;
                 default:

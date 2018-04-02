@@ -7,13 +7,12 @@ import org.apache.flume.sink.AbstractSink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.*;
 import java.sql.*;
+import java.sql.Date;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /***
  * 为项目设计，包含的功能：
@@ -29,7 +28,7 @@ import java.util.Map;
  */
 public class MysqlSink extends AbstractSink implements Configurable {
 
-    private static Logger log = LoggerFactory.getLogger(MysqlSink.class);
+    private static Logger log = LoggerFactory.getLogger(MysqlSink_Copy.class);
 
     private String hostname;
     private String port;
@@ -67,10 +66,13 @@ public class MysqlSink extends AbstractSink implements Configurable {
     // 需要匹配字典编码的字段在字典中对应的类型值
     private String field2dictTableName;
     private Map<String, String> field2dictMap = new HashMap<>();
-    private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
-    private static SimpleDateFormat UpdateBatchSdf = new SimpleDateFormat("yyyy-MM");
+    //    private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+    private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd");
+    private static SimpleDateFormat UpdateBatchSdf = new SimpleDateFormat("yyyyMM");
+    private String inputBatchPath;
 
-     private int batchOfLossRecord = 0;
+    private int batchOfLossRecord = 0;
+    private static Properties props=new Properties();
 
     public MysqlSink() {
         log.info("start sink service. name : mysql sink.");
@@ -98,6 +100,8 @@ public class MysqlSink extends AbstractSink implements Configurable {
         separator = context.getString("separator", ",");
         field2dictTableName = context.getString("field2dictTableName", "data_type_field2type");
 
+         inputBatchPath = context.getString("inputBatchPath","/software/flume-ng/conf/input_batch.properties");
+//        Preconditions.checkNotNull(inputBatchPath, "inputBatchPath must be set!!");
     }
 
     public void start() {
@@ -180,18 +184,18 @@ public class MysqlSink extends AbstractSink implements Configurable {
 //            }
             statement = conn.createStatement();
             //获取地域编码表
-             rs = statement.executeQuery("select RegionName,OtherName,RegionId from " + encodeTableName);
+            rs = statement.executeQuery("select RegionName,OtherName,RegionId from " + encodeTableName);
             while (rs.next()) {
                 encodeMap.put(rs.getString(1), rs.getInt(3));//获取标准名
                 encodeMap.put(rs.getString(2), rs.getInt(3));//获取别名
             }
 
             //获取枚举字典表
-             rsDict = statement.executeQuery("select TYPE,CNNAME,CODE_ID from " + dictTableName);
+            rsDict = statement.executeQuery("select TYPE,CNNAME,CODE_ID from " + dictTableName);
             dictMap = getdictMap(rsDict, dictMap);
 
             //获取字段对应字典表中的类型字段
-             rsField2Dict = statement.executeQuery("select FIELD_NAME,DICT_TYPE from " + field2dictTableName + " where TABLENAME = '" + tableName + "'");
+            rsField2Dict = statement.executeQuery("select FIELD_NAME,DICT_TYPE from " + field2dictTableName + " where TABLENAME = '" + tableName + "'");
             while (rsField2Dict.next()) {
                 field2dictMap.put(rsField2Dict.getString(1), rsField2Dict.getString(2));
             }
@@ -207,10 +211,12 @@ public class MysqlSink extends AbstractSink implements Configurable {
             } catch (SQLException e) {
                 e.printStackTrace();
             }
-            try {
-                statement.close();
-            } catch (SQLException e) {
-                e.printStackTrace();
+            if(statement!=null) {
+                try {
+                    statement.close();
+                } catch (SQLException e) {
+                    e.printStackTrace();
+                }
             }
         }
         log.info("表[" + tableName + "]对应编码字典长度为：" + encodeMap.size());
@@ -223,20 +229,28 @@ public class MysqlSink extends AbstractSink implements Configurable {
         Transaction transaction = channel.getTransaction();
         Event event;
         String content;
-        String inputBatch = UpdateBatchSdf.format(new java.util.Date());
-        transaction.begin();
+        String channelName=channel.getName().toUpperCase();
+//        System.out.println("channelName:"+channelName);
+//        System.out.println("配置文件路径："+inputBatchPath);
+        String batch=getInputBatch(inputBatchPath,channelName);
+        String inputBatch = UpdateBatchSdf.format(new java.util.Date())+"_"+batch;
+        log.info("表["+tableName+"]当前批次:"+inputBatch);
+//        System.out.println("inputBatch:"+inputBatch);
+            transaction.begin();
         try {
             preparedStatement.clearBatch();
             for (int i = 0; i < batchSize; i++) {
-
                 event = channel.take();
+//                String flag=event.getHeaders().get("flag");
+//                System.out.println("flag是:" +flag+",对应字段是："+getInputBatch(inputBatchPath,flag));
+//        String inputBatch = UpdateBatchSdf.format(new java.util.Date())+"_"+getInputBatch(inputBatchPath,flag);
                 if (event != null) {
                     content = new String(event.getBody());
                     // 添加
                     String[] arr_field = content.split(separator, -1);
                     //源数据中的n个值+最终结果需要添加编码id的2个或三个值+1个插入批次。
                     if (arr_field.length + encodeFieldsNames.length + 1 != fieldSize) {
-                        String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length);
+                        String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length-1);
                         batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, exception);
                         break;
                     }
@@ -244,13 +258,16 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     for (String dictField : field2dictMap.keySet()) {
                         //获取其对应的下标
                         int index = fieldsNameList.indexOf(dictField);
+                        if(index==-1){
+                            batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, "未匹配到字典对应字段，请检查表："+dictField);
+                        }
                         String value = arr_field[index].replace("\"", "");
                         //获取当前字段对应的字典中的类型
                         String dictType = field2dictMap.get(dictField);
                         Map<String, Integer> value2CodeMap = dictMap.get(dictType);
                         Integer dictInt;
                         if(value2CodeMap.containsKey(value)){
-                         dictInt = value2CodeMap.get(value);
+                            dictInt = value2CodeMap.get(value);
                         }else{
                             dictInt=-9999;
 //                            batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, "未匹配到字典值："+value);
@@ -301,22 +318,25 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     conn.commit();
                 }
             }
-
-
             transaction.commit();
         } catch (SQLException e) {
             transaction.rollback();
             log.error("警告，Flume事务批次提交失败，执行rollback，必须解决，否则会堵塞Source队列",e);
-//            log.error("Failed to commit transaction." + "Transaction rolled back.", e);
-
-        } finally {
+            result = Status.BACKOFF;
+        } catch( Exception e) {
+//            System.out.println(e.getMessage());
+            transaction.rollback();
+            result = Status.BACKOFF;
+        }  finally {
             transaction.close();
+        log.info("表["+tableName+"]数据导入中.....");
         }
         return result;
     }
 
     public void stop() {
         super.stop();
+
         if (preparedStatement != null) {
             try {
                 preparedStatement.close();
@@ -474,7 +494,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
                     preparedStatement.setString(j + 1, value);
                     break;
                 case "DATETIME":
-                    java.sql.Date valueDate = new java.sql.Date(format.parse(arr_field[j]).getTime());
+                    Date valueDate = new Date(format.parse(value).getTime());
                     preparedStatement.setDate(j + 1, valueDate);
                     break;
                 default:
@@ -485,4 +505,26 @@ public class MysqlSink extends AbstractSink implements Configurable {
         }
     }
 
+    private String getInputBatch(String path,String flag){
+        String result = null;
+        InputStream in= null;
+        try {
+            in = new BufferedInputStream(new FileInputStream(path));
+        props.load(in);
+            result= props.getProperty(flag);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }finally {
+            if(in!=null){
+                try {
+                    in.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+        return result;
+    }
 }
