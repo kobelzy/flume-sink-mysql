@@ -1,3 +1,20 @@
+#初始化批次配置文件
+#\u7CFB\u7EDF\u914D\u7F6E\u4FEE\u6539
+#Mon Apr 02 15:45:47 CST 2018
+MONTH=201804
+PHYSICS=1
+LTE-SCENE=1
+LTE-SITE=1
+WCDMA-SITE=1
+WCDMA-SCENE=1
+GSM-SCENE=1
+GSM-CELL=1
+WCDMA_CELL=1
+GSM-SITE=1
+LTE-CELL=1
+
+
+
 # flume-sink-mysql
 配置文件
 ## Sources Definition for agent "agent"
