@@ -20,7 +20,7 @@ LTE-CELL=1
 ## Sources Definition for agent "agent"
 #ACTIVE LIST
 agent.sources = ftp
-agent.channels = gsm-site gsm-cell wcdma-site wcdma_cell lte-site lte-cell physics gsm-scene wcdma-scene lte-scene
+agent.channels = gsm-site gsm-cell wcdma-site wcdma-cell lte-site lte-cell physics gsm-scene wcdma-scene lte-scene
 agent.sinks =  sink_gsm-site sink_gsm-cell sink_wcdma-site sink_wcdma-cell sink_lte-site sink_lte-cell sink_physics sink_gsm-scene sink_wcdma-scene sink_lte-scene
 
 
@@ -33,6 +33,7 @@ agent.sources.ftp.user = hkd
 agent.sources.ftp.password = 123456
 agent.sources.ftp.working.directory = /home/hkd/
 agent.sources.ftp.filter.pattern =.+(\\.csv|\\.xlsx)
+agent.sources.ftp.excelPath = /home/lzy1/
 agent.sources.ftp.folder = /var/log/flume-ftp
 agent.sources.ftp.file.name = ftp-status-file.ser
 agent.sources.ftp.run.discover.delay=5000
