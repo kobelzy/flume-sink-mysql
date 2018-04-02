@@ -232,9 +232,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
         String channelName=channel.getName().toUpperCase();
 //        System.out.println("channelName:"+channelName);
 //        System.out.println("配置文件路径："+inputBatchPath);
-        String batch=getInputBatch(inputBatchPath,channelName);
-        String inputBatch = UpdateBatchSdf.format(new java.util.Date())+"_"+batch;
-        log.info("表["+tableName+"]当前批次:"+inputBatch);
+        String inputBatch=getInputBatch(inputBatchPath,channelName);
 //        System.out.println("inputBatch:"+inputBatch);
             transaction.begin();
         try {
@@ -329,7 +327,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
             result = Status.BACKOFF;
         }  finally {
             transaction.close();
-        log.info("表["+tableName+"]数据导入中.....");
+        log.info("表["+tableName+"],批次'"+inputBatch+"'数据导入中.....");
         }
         return result;
     }
@@ -506,12 +504,14 @@ public class MysqlSink extends AbstractSink implements Configurable {
     }
 
     private String getInputBatch(String path,String flag){
-        String result = null;
+        String batch = null;
+        String date=null;
         InputStream in= null;
         try {
             in = new BufferedInputStream(new FileInputStream(path));
         props.load(in);
-            result= props.getProperty(flag);
+            batch= props.getProperty(flag);
+            date=props.getProperty("MONTH");
         } catch (FileNotFoundException e) {
             e.printStackTrace();
         } catch (IOException e) {
@@ -525,6 +525,6 @@ public class MysqlSink extends AbstractSink implements Configurable {
                 }
             }
         }
-        return result;
+        return date+"_"+batch;
     }
 }
