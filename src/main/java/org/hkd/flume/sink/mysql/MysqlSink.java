@@ -1,13 +1,17 @@
 package org.hkd.flume.sink.mysql;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
 import org.apache.flume.*;
 import org.apache.flume.conf.Configurable;
 import org.apache.flume.sink.AbstractSink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.*;
+import java.io.BufferedInputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.sql.*;
 import java.sql.Date;
 import java.text.ParseException;
@@ -72,7 +76,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
     private String inputBatchPath;
 
     private int batchOfLossRecord = 0;
-    private static Properties props=new Properties();
+    private static Properties props = new Properties();
 
     public MysqlSink() {
         log.info("start sink service. name : mysql sink.");
@@ -93,14 +97,14 @@ public class MysqlSink extends AbstractSink implements Configurable {
         Preconditions.checkNotNull(password, "password must be set!!");
         batchSize = context.getInteger("batchSize", 100);
         Preconditions.checkNotNull(batchSize > 0, "batchSize must be a positive number!!");
-        encodeFields = context.getString("encodeFields","");
+        encodeFields = context.getString("encodeFields", "");
         encodeTableName = context.getString("encodeTableName", "base_area");
         dictTableName = context.getString("dictTableName", "data_type_def");
         lossRecordTableName = context.getString("lossRecordTableName", "loss_records");
         separator = context.getString("separator", ",");
         field2dictTableName = context.getString("field2dictTableName", "data_type_field2type");
 
-         inputBatchPath = context.getString("inputBatchPath","/software/flume-ng/conf/input_batch.properties");
+        inputBatchPath = context.getString("inputBatchPath", "/software/flume-ng/conf/input_batch.properties");
 //        Preconditions.checkNotNull(inputBatchPath, "inputBatchPath must be set!!");
     }
 
@@ -126,9 +130,9 @@ public class MysqlSink extends AbstractSink implements Configurable {
         }
         //获取插入目标表的数据格式
         Statement statement = null;
-        ResultSet rs=null;
-        ResultSet rsDict=null;
-        ResultSet rsField2Dict=null;
+        ResultSet rs = null;
+        ResultSet rsDict = null;
+        ResultSet rsField2Dict = null;
         try {
             statement = conn.createStatement();
             //创建错误数据存储表
@@ -211,7 +215,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
             } catch (SQLException e) {
                 e.printStackTrace();
             }
-            if(statement!=null) {
+            if (statement != null) {
                 try {
                     statement.close();
                 } catch (SQLException e) {
@@ -229,49 +233,56 @@ public class MysqlSink extends AbstractSink implements Configurable {
         Transaction transaction = channel.getTransaction();
         Event event;
         String content;
-        String channelName=channel.getName().toUpperCase();
-//        System.out.println("channelName:"+channelName);
-//        System.out.println("配置文件路径："+inputBatchPath);
-        String batch=getInputBatch(inputBatchPath,channelName);
-        String inputBatch = UpdateBatchSdf.format(new java.util.Date())+"_"+batch;
-        log.info("表["+tableName+"]当前批次:"+inputBatch);
-//        System.out.println("inputBatch:"+inputBatch);
-            transaction.begin();
+        String channelName = channel.getName().toUpperCase();
+        List<String> actions = Lists.newArrayList();
+
+        transaction.begin();
+        String inputBatch=null;
+
         try {
             preparedStatement.clearBatch();
+
             for (int i = 0; i < batchSize; i++) {
                 event = channel.take();
-//                String flag=event.getHeaders().get("flag");
-//                System.out.println("flag是:" +flag+",对应字段是："+getInputBatch(inputBatchPath,flag));
-//        String inputBatch = UpdateBatchSdf.format(new java.util.Date())+"_"+getInputBatch(inputBatchPath,flag);
                 if (event != null) {
                     content = new String(event.getBody());
+                    actions.add(content);
+                } else {
+                    result = Status.BACKOFF;
+                    break;
+                }
+            }
+            if (actions.size() > 0) {
+                preparedStatement.clearBatch();
+                inputBatch = getInputBatch(inputBatchPath, channelName);
+                for (String temp : actions) {
                     // 添加
-                    String[] arr_field = content.split(separator, -1);
+                    String[] arr_field = temp.split(separator, -1);
                     //源数据中的n个值+最终结果需要添加编码id的2个或三个值+1个插入批次。
                     if (arr_field.length + encodeFieldsNames.length + 1 != fieldSize) {
-                        String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length-1);
-                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, exception);
-                        break;
+                        String exception = "数据长度错误，当前数据长度：" + arr_field.length + "目标长度：" + (fieldSize - encodeFieldsNames.length - 1);
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, temp, tableName, batchOfLossRecord, exception);
+                        continue;
                     }
                     //int部分字段匹配字典表
                     for (String dictField : field2dictMap.keySet()) {
                         //获取其对应的下标
                         int index = fieldsNameList.indexOf(dictField);
-                        if(index==-1){
-                            batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, "未匹配到字典对应字段，请检查表："+dictField);
+                        if (index == -1) {
+                            batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, temp, tableName, batchOfLossRecord, "未匹配到字典对应字段，请检查表：" + dictField);
+                            continue;
                         }
                         String value = arr_field[index].replace("\"", "");
                         //获取当前字段对应的字典中的类型
                         String dictType = field2dictMap.get(dictField);
                         Map<String, Integer> value2CodeMap = dictMap.get(dictType);
                         Integer dictInt;
-                        if(value2CodeMap.containsKey(value)){
+                        if (value2CodeMap.containsKey(value)) {
                             dictInt = value2CodeMap.get(value);
-                        }else{
-                            dictInt=-9999;
+                        } else {
+                            dictInt = -9999;
 //                            batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, "未匹配到字典值："+value);
-                            log.error("未匹配到字典值："+value);
+                            log.error("未匹配到字典值：" + value);
                         }
                         //获取该值对应的字典
                         arr_field[index] = String.valueOf(dictInt);
@@ -286,50 +297,45 @@ public class MysqlSink extends AbstractSink implements Configurable {
                             String encodeFieldsName = encodeFieldsNames[j];
                             //需要添加编码的字段的下标
                             int fieldIndex = fieldsNameList.indexOf(encodeFieldsName);
-                            String field=arr_field[fieldIndex].replace("\"", "");
-                            Integer encodeValue = encodeMap.getOrDefault(field,-9999);
+                            String field = arr_field[fieldIndex].replace("\"", "");
+                            Integer encodeValue = encodeMap.getOrDefault(field, -9999);
                             preparedStatement.setInt(arr_field.length + j + 1, encodeValue);
                         }
                         //添加批次时间
                         preparedStatement.setString(fieldSize, inputBatch);
-                        log.debug(content);
+                        log.debug(temp);
                         preparedStatement.addBatch();
-                    } catch (ParseException e) {
-                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
+                    } catch (ParseException | SQLException e) {
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, temp, tableName, batchOfLossRecord, e.getMessage());
 //                        e.printStackTrace();
-                        continue;
-                    } catch (SQLException e) {
-                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
-//                        e.printStackTrace();
-                        continue;
                     } catch (Exception e) {
-                        batchOfLossRecord=writeLossRecords(lossRecordStatement, lossRecordConn, content, tableName, batchOfLossRecord, e.getMessage());
+                        batchOfLossRecord = writeLossRecords(lossRecordStatement, lossRecordConn, temp, tableName, batchOfLossRecord, e.getMessage());
 //                        e.printStackTrace();
-                        continue;
                     }
+                }
+                preparedStatement.executeBatch();
+                conn.commit();
 
-                } else {
-                    result = Status.BACKOFF;
-                    break;
-                }
-//                System.out.println("批次："+i);
-                if (i == batchSize - 1) {
-                    preparedStatement.executeBatch();
-                    conn.commit();
-                }
+                lossRecordStatement.executeBatch();
+                lossRecordConn.commit();
+                lossRecordStatement.clearBatch();
+                batchOfLossRecord = 0;
+
             }
             transaction.commit();
         } catch (SQLException e) {
             transaction.rollback();
-            log.error("警告，Flume事务批次提交失败，执行rollback，必须解决，否则会堵塞Source队列",e);
+            log.error("警告，Flume事务批次提交失败，执行rollback，必须解决，否则会堵塞Source队列", e);
             result = Status.BACKOFF;
-        } catch( Exception e) {
+        } catch (Exception e) {
 //            System.out.println(e.getMessage());
             transaction.rollback();
             result = Status.BACKOFF;
-        }  finally {
+        } finally {
             transaction.close();
-        log.info("表["+tableName+"]数据导入中.....");
+            if(inputBatch!=null) {
+                log.info("表[" + tableName + "],当前批次:" + inputBatch + "，正在数据导入中.....");
+            }
         }
         return result;
     }
@@ -393,7 +399,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
      * @param batchOfLossRecord
      * @param exception
      */
-    private static int writeLossRecords(PreparedStatement lossRecordStatement, Connection conn, String record, String tableName, int batchOfLossRecord, String exception) {
+    private int writeLossRecords(PreparedStatement lossRecordStatement, Connection conn, String record, String tableName, int batchOfLossRecord, String exception) {
         try {
             lossRecordStatement.setString(1, tableName);
             lossRecordStatement.setString(2, exception);
@@ -402,7 +408,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
                 lossRecordStatement.addBatch();
             } else {
                 lossRecordStatement.executeBatch();
-                conn.commit();
+                lossRecordConn.commit();
                 lossRecordStatement.clearBatch();
                 batchOfLossRecord = 0;
             }
@@ -410,7 +416,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
             log.error("有错误数据，且写入错误库失败:" + e.getMessage());
             e.printStackTrace();
         }
-        log.warn("数据错误："+ exception);
+        log.warn("数据错误：" + exception);
         return ++batchOfLossRecord;
     }
 
@@ -505,19 +511,19 @@ public class MysqlSink extends AbstractSink implements Configurable {
         }
     }
 
-    private String getInputBatch(String path,String flag){
+    private String getInputBatch(String path, String flag) {
         String result = null;
-        InputStream in= null;
+        String month = null;
+        InputStream in = null;
         try {
             in = new BufferedInputStream(new FileInputStream(path));
-        props.load(in);
-            result= props.getProperty(flag);
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
+            props.load(in);
+            month = props.getProperty("MONTH");
+            result = props.getProperty(flag);
         } catch (IOException e) {
             e.printStackTrace();
-        }finally {
-            if(in!=null){
+        } finally {
+            if (in != null) {
                 try {
                     in.close();
                 } catch (IOException e) {
@@ -525,6 +531,6 @@ public class MysqlSink extends AbstractSink implements Configurable {
                 }
             }
         }
-        return result;
+        return month + "_" + result;
     }
 }
