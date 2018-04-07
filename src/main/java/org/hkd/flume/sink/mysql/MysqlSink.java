@@ -334,7 +334,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
         } finally {
             transaction.close();
             if(inputBatch!=null) {
-                log.info("表[" + tableName + "],当前批次:" + inputBatch + "，正在数据导入中.....");
+                log.info("表[" + tableName + "]当前批次:" + inputBatch + "，正在数据导入中.....");
             }
         }
         return result;
