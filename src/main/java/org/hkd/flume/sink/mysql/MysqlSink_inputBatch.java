@@ -19,6 +19,9 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 
 /***
+ * 可以指定具体批次如：201801_1
+ * 会单独维护一个properties离线文件来保存批次信息
+ *
  * 为项目设计，包含的功能：
  * 1：获取目标表的字段以及数据类型，对每一条数据做数据过滤以及数据校验
  * 2：针对不同表的fieldEncode，匹配其地域编码，地域编码由一个单层map构成
@@ -30,7 +33,7 @@ import java.util.*;
  *      针对空值，数值类型使用-9999代替。
  * 5：对于转型失败、匹配字典失败的数据进行另外的错误数据记录，单独放一张表中。
  */
-public class MysqlSink extends AbstractSink implements Configurable {
+public class MysqlSink_inputBatch extends AbstractSink implements Configurable {
 
     private static Logger log = LoggerFactory.getLogger(MysqlSink_Copy.class);
 
@@ -73,12 +76,14 @@ public class MysqlSink extends AbstractSink implements Configurable {
     //    private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
     private static SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd");
     private static SimpleDateFormat UpdateBatchSdf = new SimpleDateFormat("yyyyMM");
+    private String inputBatchPath;
 
     //不需要被插入数据的字段。不需要强制指定，使用逗号分隔。
     private String notInsertColumes;
     private int batchOfLossRecord = 0;
+    private static Properties props = new Properties();
 
-    public MysqlSink() {
+    public MysqlSink_inputBatch() {
         log.info("start sink service. name : mysql sink.");
     }
 
@@ -104,6 +109,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
         separator = context.getString("separator", ",");
         field2dictTableName = context.getString("field2dictTableName", "data_type_field2type");
         notInsertColumes=context.getString("notInsertColumes", "");
+        inputBatchPath = context.getString("inputBatchPath", "/software/flume-ng/conf/input_batch.properties");
 //        Preconditions.checkNotNull(inputBatchPath, "inputBatchPath must be set!!");
     }
 
@@ -145,7 +151,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
                 //获取字段名称
                 fieldsNameList.add(rsMetaData.getColumnName(i + 1));
             }
-            if(!notInsertColumes.equals("")){
+            if(notInsertColumes!=""){
                for(String notInsertColume: notInsertColumes.split(",",-1)){
                    fieldsNameList.remove(notInsertColume);
                }
@@ -237,10 +243,12 @@ public class MysqlSink extends AbstractSink implements Configurable {
         Transaction transaction = channel.getTransaction();
         Event event;
         String content;
+        String channelName = channel.getName().toUpperCase();
         List<String> actions = Lists.newArrayList();
 
         transaction.begin();
-        String inputBatch = getlastMonth();
+        String inputBatch=null;
+
         try {
             preparedStatement.clearBatch();
 
@@ -256,6 +264,7 @@ public class MysqlSink extends AbstractSink implements Configurable {
             }
             if (actions.size() > 0) {
                 preparedStatement.clearBatch();
+                inputBatch = getInputBatch(inputBatchPath, channelName);
                 for (String temp : actions) {
                     // 添加
                     String[] arr_field = temp.split(separator, -1);
@@ -509,40 +518,27 @@ public class MysqlSink extends AbstractSink implements Configurable {
 
         }
     }
-    /**
-        * 功能描述:获取上月的日期
-        *
-        * Param
-        * Return
-    　　* Author lzy
-    　　* Date 2018/4/13 15:45
-    　　*/
-    private String getlastMonth(){
-        Calendar c = Calendar.getInstance();
-        c.add(Calendar.MONTH, -1);
-        String time = UpdateBatchSdf.format(c.getTime());
-        return time;
+
+    private String getInputBatch(String path, String flag) {
+        String result = null;
+        String month = null;
+        InputStream in = null;
+        try {
+            in = new BufferedInputStream(new FileInputStream(path));
+            props.load(in);
+            month = props.getProperty("MONTH");
+            result = props.getProperty(flag);
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            if (in != null) {
+                try {
+                    in.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+        return month + "_" + result;
     }
-//    private String getInputBatch(String path, String flag) {
-//        String result = null;
-//        String month = null;
-//        InputStream in = null;
-//        try {
-//            in = new BufferedInputStream(new FileInputStream(path));
-//            props.load(in);
-//            month = props.getProperty("MONTH");
-//            result = props.getProperty(flag);
-//        } catch (IOException e) {
-//            e.printStackTrace();
-//        } finally {
-//            if (in != null) {
-//                try {
-//                    in.close();
-//                } catch (IOException e) {
-//                    e.printStackTrace();
-//                }
-//            }
-//        }
-//        return month + "_" + result;
-//    }
 }

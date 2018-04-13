@@ -1,5 +1,6 @@
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.Calendar;
 
 /**
  * Created by Administrator on 2018/3/24.
@@ -18,10 +19,17 @@ public class IntTest {
         } catch (ParseException e) {
             e.printStackTrace();
         }
-
+        System.out.println(getlastMonth());
     }
     private static int increaseindex(int index){
         System.out.println("当前Index:"+index);
         return ++index;
+    }
+    private static String getlastMonth(){
+        Calendar c = Calendar.getInstance();
+        c.add(Calendar.MONTH, -1);
+        SimpleDateFormat format =  new SimpleDateFormat("yyyyMM");
+        String time = format.format(c.getTime());
+        return time;
     }
 }
